@@ -97,9 +97,38 @@ fn truncate(metrics: &dyn TextMetrics, s: &str, size: f32, max: f32) -> String {
     if fits(s) {
         return s.to_owned();
     }
-    let chars: Vec<char> = s.chars().collect();
-    for n in (1..chars.len()).rev() {
-        let t = format!("{}...", chars[..n].iter().collect::<String>());
+    if metrics.monotonic_prefixes(s, "...", size, BOLD) {
+        let ends: Vec<usize> = s.char_indices().map(|(i, _)| i).collect();
+        let mut candidate = String::with_capacity(s.len() + 3);
+        let (mut lo, mut hi) = (0, ends.len());
+        // Find the first non-fitting prefix. As in the fallback, the full label plus
+        // ellipsis is excluded; an empty prefix represents the ellipsis alone.
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            candidate.clear();
+            candidate.push_str(&s[..ends[mid]]);
+            candidate.push_str("...");
+            if fits(&candidate) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        candidate.clear();
+        if lo > 0 {
+            candidate.push_str(&s[..ends[lo - 1]]);
+            candidate.push_str("...");
+        }
+        return candidate;
+    }
+    let mut t = String::with_capacity(s.len() + 3);
+    t.push_str(s);
+    for (end, _) in s.char_indices().rev() {
+        if end == 0 {
+            break;
+        }
+        t.truncate(end);
+        t.push_str("...");
         if fits(&t) {
             return t;
         }
@@ -341,5 +370,44 @@ mod tests {
         let t = truncate(&Approx, "a long section name", 12.0, 60.0);
         assert!(t.ends_with("...") && t.len() < 19, "{t}");
         assert_eq!(truncate(&Approx, "abc", 12.0, 1.0), "");
+    }
+
+    #[test]
+    fn truncation_preserves_unicode_prefixes() {
+        check_truncation(&Approx);
+        #[cfg(feature = "png")]
+        check_truncation(&crate::scene::png::FontMetrics);
+    }
+
+    fn check_truncation(metrics: &dyn TextMetrics) {
+        for text in [
+            "",
+            "abc",
+            "a long section name",
+            "界",
+            "é界abc",
+            "a\u{301}界🙂xyz",
+        ] {
+            for max in [0.0, 22.0, 40.0, 60.0, 1000.0] {
+                let chars: Vec<char> = text.chars().collect();
+                let fits = |s: &str| metrics.styled_width(s, 12.0, BOLD) <= max;
+                let expected = if fits(text) {
+                    text.to_owned()
+                } else {
+                    (1..chars.len())
+                        .rev()
+                        .map(|n| format!("{}...", chars[..n].iter().collect::<String>()))
+                        .find(|s| fits(s))
+                        .unwrap_or_else(|| {
+                            if fits("...") {
+                                "...".to_owned()
+                            } else {
+                                String::new()
+                            }
+                        })
+                };
+                assert_eq!(truncate(metrics, text, 12.0, max), expected);
+            }
+        }
     }
 }

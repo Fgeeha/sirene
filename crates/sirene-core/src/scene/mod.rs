@@ -207,6 +207,14 @@ pub trait TextMetrics {
         let _ = style;
         self.width(text, size)
     }
+
+    /// Whether widths of successively longer character prefixes of `text`, each followed
+    /// by `suffix`, never decrease at this size and style. Enables binary search when
+    /// shortening labels. The default supports arbitrary shaping backends.
+    fn monotonic_prefixes(&self, text: &str, suffix: &str, size: f32, style: TextStyle) -> bool {
+        let _ = (text, suffix, size, style);
+        false
+    }
 }
 
 /// Monospace estimate: 0.6 em per terminal column, so wide characters count double.
@@ -216,6 +224,12 @@ pub struct Approx;
 impl TextMetrics for Approx {
     fn width(&self, text: &str, size: f32) -> f32 {
         UnicodeWidthStr::width(text) as f32 * size * 0.6
+    }
+
+    fn monotonic_prefixes(&self, text: &str, suffix: &str, size: f32, _: TextStyle) -> bool {
+        // Combining marks, emoji sequences, and script ligatures can change the width of
+        // an earlier character. ASCII has independent, nonnegative column widths.
+        text.is_ascii() && suffix.is_ascii() && size >= 0.0
     }
 }
 

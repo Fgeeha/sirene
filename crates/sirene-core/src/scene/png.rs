@@ -57,6 +57,11 @@ fn fonts() -> Arc<fontdb::Database> {
 pub struct FontMetrics;
 
 impl TextMetrics for FontMetrics {
+    fn monotonic_prefixes(&self, _: &str, _: &str, size: f32, _: TextStyle) -> bool {
+        // This backend sums independent, nonnegative glyph advances.
+        size >= 0.0
+    }
+
     fn width(&self, text: &str, size: f32) -> f32 {
         self.styled_width(text, size, TextStyle::default())
     }

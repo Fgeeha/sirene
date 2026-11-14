@@ -10,7 +10,13 @@ use std::time::Duration;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use sirene_core::ascii::Options;
 use sirene_core::diagram;
+use sirene_core::flowchart::EdgeOrder;
+use sirene_core::layout::{self, ClusterSpec, EdgeSpec, Graph, Item, NodeSpec, Size};
 use sirene_core::scene::{Approx, Theme};
+
+#[path = "../src/layout/route.rs"]
+#[allow(dead_code)]
+mod route;
 
 /// `header`, then `line(i)` for each `i` below `n`.
 fn lines(header: &str, n: usize, line: impl Fn(usize) -> String) -> String {
@@ -62,6 +68,20 @@ const SHAPES: &[Shape] = &[
             lines("flowchart TD", n, |i| {
                 format!("subgraph s{i}\na{i} --> b{i}\nend\nb{i} --> a{}", i + 1)
             })
+        },
+    },
+    Shape {
+        // One titled subgraph per rank, exercising repeated diagram-center scans.
+        name: "flowchart_titled_chain",
+        sizes: [50, 500],
+        source: |n| {
+            let mut src = lines("flowchart TD", n, |i| {
+                format!("subgraph s{i}[Title {i}]\na{i}\nb{i}\nend")
+            });
+            src.push_str(&lines("", n.saturating_sub(1), |i| {
+                format!("b{i} --> a{}", i + 1)
+            }));
+            src
         },
     },
     Shape {
@@ -145,5 +165,158 @@ fn scale(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, scale);
+fn layout_scale(c: &mut Criterion) {
+    let mut group = c.benchmark_group("layout_scale");
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(2));
+    for n in [100, 1000] {
+        let lanes = Graph {
+            clusters: (0..n)
+                .map(|_| ClusterSpec {
+                    parent: None,
+                    direction: None,
+                    title: Size::new(4, 1),
+                    lane: true,
+                })
+                .collect(),
+            nodes: (0..n)
+                .map(|i| NodeSpec {
+                    size: Size::new(3, 1),
+                    parent: Some(i),
+                })
+                .collect(),
+            ..Graph::default()
+        };
+        group.bench_with_input(BenchmarkId::new("lanes", n), &lanes, |b, g| {
+            b.iter(|| layout::layout(black_box(g), &sirene_core::ascii::CONFIG))
+        });
+        let fan = Graph {
+            nodes: (0..=n)
+                .map(|_| NodeSpec {
+                    size: Size::new(3, 1),
+                    parent: None,
+                })
+                .collect(),
+            edges: (1..=n)
+                .map(|i| EdgeSpec {
+                    from: Item::Node(0),
+                    to: Item::Node(i),
+                    min_len: 1,
+                    label: None,
+                    constraint: true,
+                    ports: [None; 2],
+                    anchors: [None; 2],
+                })
+                .collect(),
+            ordering: vec![(0, EdgeOrder::Out)],
+            ..Graph::default()
+        };
+        group.bench_with_input(BenchmarkId::new("ordered_fan", n), &fan, |b, g| {
+            b.iter(|| layout::layout(black_box(g), &sirene_core::ascii::CONFIG))
+        });
+    }
+    group.finish();
+}
+
+fn route_scale(c: &mut Criterion) {
+    let mut group = c.benchmark_group("route_scale");
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(2));
+    for n in [1_100, 5_000] {
+        let disjoint: Vec<_> = (0..n)
+            .map(|i| route::Jog {
+                top: i * 3,
+                bottom: i * 3 + 1,
+                flat: false,
+            })
+            .collect();
+        group.bench_with_input(BenchmarkId::new("disjoint", n), &disjoint, |b, jogs| {
+            b.iter(|| route::tracks(black_box(jogs)))
+        });
+        let overlapping: Vec<_> = (0..n)
+            .map(|i| route::Jog {
+                top: i,
+                bottom: i + n,
+                flat: false,
+            })
+            .collect();
+        group.bench_with_input(
+            BenchmarkId::new("overlapping", n),
+            &overlapping,
+            |b, jogs| b.iter(|| route::tracks(black_box(jogs))),
+        );
+    }
+    group.finish();
+}
+
+/// Header truncation should depend on label length without repeatedly allocating prefixes.
+/// Lowering is outside the timed loop; both labels that fit and labels that must be cut are
+/// included, with multibyte text to exercise character boundaries.
+fn treemap_text(c: &mut Criterion) {
+    let mut group = c.benchmark_group("treemap_text");
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(2));
+    for (name, unit) in [("ascii", "a"), ("unicode", "界é")] {
+        for n in [8, 128, 2048] {
+            let src = format!("treemap-beta\n\"{}\"\n  \"Leaf\": 1\n", unit.repeat(n));
+            let lowered = diagram::lower(&src);
+            assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+            group.bench_with_input(BenchmarkId::new(name, n), &lowered, |b, l| {
+                b.iter(|| black_box(l).diagram.scene(&Approx, &Theme::LIGHT));
+            });
+        }
+    }
+    group.finish();
+}
+
+fn railroad_measurement(c: &mut Criterion) {
+    use sirene_core::railroad::{Expr, Railroad, Rule};
+    let mut group = c.benchmark_group("railroad_measurement");
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(2));
+    for n in [32, 128, 512] {
+        for nested in [false, true] {
+            let atom = || Expr::Terminal("word".into());
+            let definition = if nested {
+                (0..n).fold(atom(), |inner, _| Expr::Optional(Box::new(inner)))
+            } else {
+                Expr::Sequence((0..n).map(|_| atom()).collect())
+            };
+            let chart = Railroad {
+                rules: vec![Rule {
+                    name: "rule".into(),
+                    definition,
+                }],
+                ..Railroad::default()
+            };
+            group.bench_with_input(
+                BenchmarkId::new(if nested { "nested" } else { "flat" }, n),
+                &chart,
+                |b, chart| {
+                    b.iter(|| {
+                        sirene_core::scene::railroad(black_box(chart), &Approx, &Theme::LIGHT)
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    scale,
+    layout_scale,
+    route_scale,
+    treemap_text,
+    railroad_measurement
+);
 criterion_main!(benches);

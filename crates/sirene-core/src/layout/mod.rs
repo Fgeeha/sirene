@@ -1165,8 +1165,9 @@ impl<'a, 'b> Placer<'a, 'b> {
                 let mut g = groups.remove(&at).unwrap_or_default();
                 g.sort_unstable();
                 let mut out: Vec<usize> = Vec::new();
+                let mut seen = HashSet::new();
                 for (_, e) in g {
-                    if !out.contains(&e) {
+                    if seen.insert(e) {
                         out.push(e);
                     }
                 }
