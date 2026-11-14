@@ -8,6 +8,7 @@ use super::{
     Color, Element, Owner, Primitive, Pt, Scene, Segment, Stroke, TextMetrics, TextStyle, Theme,
 };
 use crate::railroad::{Expr, Railroad};
+use std::collections::HashMap;
 
 const FONT: f32 = 16.0;
 /// The height of a line of text, as a browser measures 16px text.
@@ -39,6 +40,9 @@ struct Draw<'a, M: TextMetrics> {
     theme: &'a Theme,
     lines: Vec<Element>,
     boxes: Vec<Element>,
+    // Addresses identify expressions in the borrowed chart, which stays alive and unchanged
+    // throughout drawing. Keys are never dereferenced and the cache is cleared per rule.
+    dimensions: HashMap<*const Expr, Dim>,
 }
 
 fn el(primitive: Primitive) -> Element {
@@ -88,6 +92,9 @@ impl<M: TextMetrics> Draw<'_, M> {
     }
 
     fn measure(&self, e: &Expr) -> Dim {
+        if let Some(&dim) = self.dimensions.get(&std::ptr::from_ref(e)) {
+            return dim;
+        }
         match e {
             Expr::Terminal(_) | Expr::NonTerminal(_) | Expr::Special(_) => {
                 let (_, text) = atom(e).unwrap_or((Look::Terminal, String::new()));
@@ -137,6 +144,20 @@ impl<M: TextMetrics> Draw<'_, M> {
                 }
             }
         }
+    }
+
+    fn prepare(&mut self, e: &Expr) {
+        match e {
+            Expr::Sequence(items) | Expr::Choice(items) => {
+                for item in items {
+                    self.prepare(item);
+                }
+            }
+            Expr::Optional(inner) | Expr::Repeat { expr: inner, .. } => self.prepare(inner),
+            _ => {}
+        }
+        let dim = self.measure(e);
+        self.dimensions.insert(std::ptr::from_ref(e), dim);
     }
 
     /// Draws `e` with its top left at `(x, y)`; returns its size.
@@ -340,11 +361,14 @@ pub fn railroad(chart: &Railroad, metrics: &impl TextMetrics, theme: &Theme) -> 
         theme,
         lines: Vec::new(),
         boxes: Vec::new(),
+        dimensions: HashMap::new(),
     };
     let mut names = Vec::new();
     let mut y = PADDING;
     let mut max_w: f32 = 0.0;
     for rule in &chart.rules {
+        d.dimensions.clear();
+        d.prepare(&rule.definition);
         // An unnamed rule, such as a PlantUML regex, starts at the left.
         let label = if rule.name.is_empty() {
             String::new()
@@ -450,6 +474,7 @@ mod tests {
             theme: &Theme::LIGHT,
             lines: Vec::new(),
             boxes: Vec::new(),
+            dimensions: HashMap::new(),
         };
         let x = Expr::Terminal("x".to_owned());
         let a = d.measure(&x);
@@ -503,5 +528,33 @@ mod tests {
             ]
         );
         assert!(texts(&s).iter().any(|(t, _)| t == "? c ?"));
+    }
+
+    #[test]
+    fn cached_dimensions_preserve_drawing() {
+        let e = Expr::Choice(vec![
+            Expr::Optional(Box::new(Expr::Terminal("界é".into()))),
+            Expr::Repeat {
+                expr: Box::new(Expr::Sequence(vec![
+                    Expr::NonTerminal("rule".into()),
+                    Expr::Special("condition".into()),
+                ])),
+                min: 0,
+                max: None,
+            },
+        ]);
+        let make = || Draw {
+            metrics: &Approx,
+            theme: &Theme::LIGHT,
+            lines: Vec::new(),
+            boxes: Vec::new(),
+            dimensions: HashMap::new(),
+        };
+        let mut plain = make();
+        let mut cached = make();
+        cached.prepare(&e);
+        assert_eq!(plain.draw(&e, 10.0, 20.0), cached.draw(&e, 10.0, 20.0));
+        assert_eq!(plain.lines, cached.lines);
+        assert_eq!(plain.boxes, cached.boxes);
     }
 }
