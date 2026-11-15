@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
             }
         }
@@ -83,7 +88,8 @@ fn ascii_charset_snapshots() {
             &Options {
                 charset: Charset::Ascii,
             },
-        );
+        )
+        .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }

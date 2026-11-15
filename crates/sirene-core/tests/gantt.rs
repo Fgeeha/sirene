@@ -63,12 +63,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -79,9 +84,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -447,5 +455,7 @@ fn drawing() {
 }
 
 fn gantt_scene(g: &Gantt) -> Scene {
-    Diagram::Gantt(g.clone()).scene(&Approx, &Theme::LIGHT)
+    Diagram::Gantt(g.clone())
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap()
 }

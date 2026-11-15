@@ -12,6 +12,9 @@ use crate::lines::{MAX_DEPTH, MetaClose, Next, end_block_len, too_deep};
 use crate::syntax::SyntaxKind::{self, *};
 
 pub(crate) fn parse(src: &str) -> (GreenNode, Vec<Diagnostic>) {
+    if let Some(rejected) = crate::lines::oversized(src) {
+        return rejected;
+    }
     let mut p = Parser {
         src,
         pos: 0,
@@ -116,7 +119,7 @@ fn agentflow_arrow(s: &str) -> bool {
 }
 
 fn offset(n: usize) -> TextSize {
-    TextSize::try_from(n).expect("source larger than 4 GiB")
+    TextSize::new(n.min(u32::MAX as usize) as u32)
 }
 
 impl<'a> Parser<'a> {
@@ -131,7 +134,9 @@ impl<'a> Parser<'a> {
     }
 
     fn token(&mut self, kind: SyntaxKind, len: usize) {
-        debug_assert!(len > 0, "empty {kind:?} token");
+        if len == 0 {
+            return;
+        }
         let text = &self.src[self.pos..self.pos + len];
         self.builder.token(kind.into(), text);
         self.pos += len;
@@ -626,7 +631,7 @@ impl<'a> Parser<'a> {
                     ),
                 }
             }
-            None => unreachable!("edge() called without an edge at the cursor"),
+            None => self.error(self.pos, self.pos, "expected an edge"),
         }
         self.finish();
     }

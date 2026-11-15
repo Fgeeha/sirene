@@ -36,7 +36,13 @@ pub fn icons(theme: &Theme, metrics: &impl TextMetrics) -> Vec<Scene> {
             let (open, close) = shape.delimiters().unwrap_or(("[", "]"));
             let src = format!("flowchart TD\n    A{open}\"  \"{close}\n");
             let chart = flowchart::parse(&src).lower().flowchart;
-            scene::flowchart(&chart, metrics, theme)
+            match scene::flowchart(&chart, metrics, theme) {
+                Ok(scene) => scene,
+                Err(error) => {
+                    log::error!("cannot draw shape icon: {}", error.report());
+                    crate::document::error_scene(&error, theme)
+                }
+            }
         })
         .collect()
 }

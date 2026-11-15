@@ -27,14 +27,19 @@ fn font(style: TextStyle) -> &'static [u8] {
     }
 }
 
-fn face(style: TextStyle) -> &'static ttf_parser::Face<'static> {
-    static FACES: OnceLock<[ttf_parser::Face<'static>; 4]> = OnceLock::new();
+fn face(style: TextStyle) -> Option<&'static ttf_parser::Face<'static>> {
+    static FACES: OnceLock<[Option<ttf_parser::Face<'static>>; 4]> = OnceLock::new();
     let faces = FACES.get_or_init(|| {
-        [FONT, BOLD, ITALIC, BOLD_ITALIC]
-            .map(|f| ttf_parser::Face::parse(f, 0).expect("the embedded fonts parse"))
+        [FONT, BOLD, ITALIC, BOLD_ITALIC].map(|f| match ttf_parser::Face::parse(f, 0) {
+            Ok(face) => Some(face),
+            Err(e) => {
+                log::error!("cannot parse embedded font; using approximate metrics: {e}");
+                None
+            }
+        })
     });
     let i = usize::from(style.bold) + 2 * usize::from(style.italic);
-    &faces[i]
+    faces[i].as_ref()
 }
 
 fn fonts() -> Arc<fontdb::Database> {
@@ -67,7 +72,9 @@ impl TextMetrics for FontMetrics {
     }
 
     fn styled_width(&self, text: &str, size: f32, style: TextStyle) -> f32 {
-        let face = face(style);
+        let Some(face) = face(style) else {
+            return Approx.width(text, size);
+        };
         let em = f32::from(face.units_per_em());
         let mut buf = [0u8; 4];
         text.chars()
@@ -159,17 +166,19 @@ pub fn fit(scene: &Scene, scale: f32) -> f32 {
 }
 
 /// Draws `scene` as a PNG with `options.scale` pixels per scene unit.
-pub fn write(scene: &Scene, options: Options) -> Result<Vec<u8>, String> {
+pub fn write(scene: &Scene, options: Options) -> crate::Result<Vec<u8>> {
     let Options { scale, quality } = options;
     if !(scale.is_finite() && scale > 0.0) {
-        return Err(format!("scale must be a positive number, not {scale}"));
+        return Err(crate::Error::new(format!(
+            "scale must be a positive number, not {scale}"
+        )));
     }
     let side = |v: f32| (v * scale).ceil();
     let (w, h) = (side(scene.width), side(scene.height));
     if w > MAX_SIDE as f32 || h > MAX_SIDE as f32 {
-        return Err(format!(
+        return Err(crate::Error::new(format!(
             "a {w}x{h} image is too large (at most {MAX_SIDE} pixels a side)"
-        ));
+        )));
     }
     let (shape_rendering, text_rendering) = quality.rendering();
     let options = usvg::Options {
@@ -180,15 +189,18 @@ pub fn write(scene: &Scene, options: Options) -> Result<Vec<u8>, String> {
         ..usvg::Options::default()
     };
     let tree = usvg::Tree::from_str(&super::svg::write(scene), &options)
-        .map_err(|e| format!("cannot draw the diagram: {e}"))?;
+        .map_err(|e| crate::Error::with_source("cannot draw the diagram", e))?;
     // Nonzero, as usvg rejects an empty SVG size above.
-    let mut pixmap = Pixmap::new(w as u32, h as u32).expect("the size is checked above");
+    let mut pixmap = Pixmap::new(w as u32, h as u32)
+        .ok_or_else(|| crate::Error::new(format!("cannot allocate a {w}x{h} image")))?;
     resvg::render(
         &tree,
         Transform::from_scale(scale, scale),
         &mut pixmap.as_mut(),
     );
-    let bytes = pixmap.encode_png().map_err(|e| e.to_string())?;
+    let bytes = pixmap
+        .encode_png()
+        .map_err(|e| crate::Error::with_source("cannot encode PNG", e))?;
     log::debug!(
         "encoded a {w}x{h} PNG at scale {scale}, {quality:?} quality, {} bytes",
         bytes.len()

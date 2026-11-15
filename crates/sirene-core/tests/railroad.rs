@@ -41,7 +41,7 @@ fn snapshots() {
             lowered.diagnostics
         );
         for charset in [Charset::Unicode, Charset::Ascii] {
-            let out = lowered.diagram.ascii(&Options { charset });
+            let out = lowered.diagram.ascii(&Options { charset }).unwrap();
             let kind = match charset {
                 Charset::Unicode => "valid",
                 Charset::Ascii => "ascii",
@@ -49,7 +49,7 @@ fn snapshots() {
             insta::assert_snapshot!(format!("{kind}__{name}"), out, &src);
         }
         for theme in [Theme::LIGHT, Theme::DARK] {
-            let s = lowered.diagram.scene(&Approx, &theme);
+            let s = lowered.diagram.scene(&Approx, &theme).unwrap();
             assert!(!s.elements.is_empty(), "{name}");
         }
     }
@@ -119,8 +119,8 @@ fn problems() {
         .map(|d| d.message.as_str())
         .collect();
     assert_eq!(messages, ["operators nested more than 64 deep"]);
-    lowered.diagram.scene(&Approx, &Theme::LIGHT);
-    lowered.diagram.ascii(&Default::default());
+    lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
+    lowered.diagram.ascii(&Default::default()).unwrap();
     let src = format!("railroad-ebnf-beta\na = b{} ;\n", " - c".repeat(100));
     assert_eq!(
         diagram::lower(&src).diagnostics[0].message,
@@ -133,7 +133,8 @@ fn problems() {
 fn drawing() {
     let s = diagram::lower("railroad-ebnf-beta\nr = \"a\" b ;\n")
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let texts: Vec<&str> = s
         .elements
         .iter()

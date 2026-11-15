@@ -202,7 +202,9 @@ pub fn journey(journey: &Journey, metrics: &impl TextMetrics, theme: &Theme) -> 
         p.lines(owner, lines, bx.center(), ink(fill));
         // The task's actors as dots along its top.
         for (k, a) in t.actors.iter().enumerate() {
-            let n = actors.iter().position(|b| b == a).expect("a listed actor");
+            let Some(n) = actors.iter().position(|b| b == a) else {
+                continue;
+            };
             let c = Pt::new(x + 10.0 + k as f32 * (DOT + 3.0), task_y);
             p.path(
                 owner,

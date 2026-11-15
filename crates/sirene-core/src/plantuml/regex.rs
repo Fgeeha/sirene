@@ -44,11 +44,11 @@ fn escape(c: char) -> Option<&'static str> {
     })
 }
 
-fn sequence(mut items: Vec<Expr>) -> Expr {
-    if items.len() == 1 {
-        items.pop().expect("one item")
-    } else {
-        Expr::Sequence(items)
+fn sequence(items: Vec<Expr>) -> Expr {
+    let mut items = items.into_iter();
+    match (items.next(), items.next()) {
+        (Some(item), None) => item,
+        (first, second) => Expr::Sequence(first.into_iter().chain(second).chain(items).collect()),
     }
 }
 
@@ -66,16 +66,16 @@ impl Reader<'_> {
 
     /// Alternatives separated by `|`.
     fn choice(&mut self) -> Expr {
-        let mut alts = vec![self.seq()];
+        let first = self.seq();
+        if self.peek() != Some('|') {
+            return first;
+        }
+        let mut alts = vec![first];
         while self.peek() == Some('|') {
             self.i += 1;
             alts.push(self.seq());
         }
-        if alts.len() == 1 {
-            alts.pop().expect("one alternative")
-        } else {
-            Expr::Choice(alts)
-        }
+        Expr::Choice(alts)
     }
 
     /// Atoms and their quantifiers up to `|`, `)`, or the end; adjacent literals join.
@@ -321,7 +321,8 @@ fn regex(s: &str) -> (Expr, Option<Error>, Vec<Warning>) {
 }
 
 fn range(line: &Line, start: usize, end: usize) -> TextRange {
-    let n = |x: usize| TextSize::try_from(x).expect("line fits");
+    // Regex offsets come from this bounded CST line.
+    let n = |x: usize| TextSize::new(x as u32);
     TextRange::new(line.range.start() + n(start), line.range.start() + n(end))
 }
 

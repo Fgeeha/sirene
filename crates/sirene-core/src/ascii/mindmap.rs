@@ -44,16 +44,15 @@ pub fn render(mindmap: &Mindmap, options: &Options) -> String {
     if let Some(root) = mindmap.nodes.first() {
         rows.extend(label(root));
         // Depth-first: each entry is a node and the prefix of its line.
-        let mut stack: Vec<(usize, String)> = Vec::new();
-        let push_kids = |stack: &mut Vec<(usize, String)>, i: usize, prefix: &str| {
+        let mut stack: Vec<(usize, usize, String)> = Vec::new();
+        let push_kids = |stack: &mut Vec<(usize, usize, String)>, i: usize, prefix: &str| {
             for &c in mindmap.nodes[i].children.iter().rev() {
-                stack.push((c, prefix.to_owned()));
+                stack.push((c, i, prefix.to_owned()));
             }
         };
         push_kids(&mut stack, 0, "");
-        while let Some((i, prefix)) = stack.pop() {
+        while let Some((i, parent, prefix)) = stack.pop() {
             let node = &mindmap.nodes[i];
-            let parent = node.parent.expect("a non-root node has a parent");
             let is_last = mindmap.nodes[parent].children.last() == Some(&i);
             let (head, rest) = if is_last {
                 (last, blank)

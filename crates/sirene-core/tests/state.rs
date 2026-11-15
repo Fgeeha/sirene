@@ -60,12 +60,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             // Every fixture draws.
-            let s = lowered.diagram.scene(&Approx, &Theme::LIGHT);
+            let s = lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
             assert!(!s.elements.is_empty(), "{name}");
         }
     }
@@ -80,7 +85,8 @@ fn ascii_charset_snapshots() {
             &Options {
                 charset: Charset::Ascii,
             },
-        );
+        )
+        .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -186,7 +192,7 @@ fn pseudo_states() {
 fn fork_bars_turn_with_the_direction() {
     let size = |src: &str| {
         let c = chart(src);
-        let s = scene::flowchart(&c, &Approx, &Theme::LIGHT);
+        let s = scene::flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
         let i = c.nodes.iter().position(|n| n.id == "f").unwrap();
         let (lo, hi) = s.bounds(scene::Owner::Node(i)).unwrap();
         (hi.x - lo.x, hi.y - lo.y)
@@ -229,10 +235,10 @@ fn notes() {
     assert_eq!(c.notes[1].side, NoteSide::After);
     assert_eq!(c.notes[1].label.text, "two\nlines");
     // Each note sits beside its state, on its side.
-    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT);
+    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
     let a = c.nodes.iter().position(|n| n.id == "A").unwrap();
     let (lo, hi) = s.bounds(scene::Owner::Node(a)).unwrap();
-    let state = c.layout_graph(&CellsOf).nodes[a].size;
+    let state = c.layout_graph(&CellsOf).unwrap().nodes[a].size;
     assert!(
         hi.x - lo.x > state.w as f32 * 3.0,
         "the notes widen what A owns"
@@ -249,7 +255,7 @@ fn notes_on_composite_states() {
     assert_eq!(c.notes.len(), 1);
     assert_eq!(c.notes[0].target, "C");
     let width = |c: &Flowchart| {
-        let s = scene::flowchart(c, &Approx, &Theme::LIGHT);
+        let s = scene::flowchart(c, &Approx, &Theme::LIGHT).unwrap();
         let (lo, hi) = s.bounds(scene::Owner::Cluster(0)).unwrap();
         hi.x - lo.x
     };
@@ -262,7 +268,8 @@ fn notes_on_composite_states() {
         &Options {
             charset: Charset::Unicode,
         },
-    );
+    )
+    .unwrap();
     assert!(text.contains("beside"), "{text}");
 }
 

@@ -118,7 +118,40 @@ pub(crate) fn lone_cr_as_lf(src: &str) -> std::borrow::Cow<'_, str> {
 }
 
 fn offset(n: usize) -> TextSize {
-    TextSize::try_from(n).expect("source larger than 4 GiB")
+    TextSize::new(n.min(u32::MAX as usize) as u32)
+}
+
+/// The CST stores byte offsets in `u32`; reject larger sources before tokenization.
+pub(crate) fn source_limit(src: &str, limit: usize) -> Option<Diagnostic> {
+    (src.len() > limit).then(|| {
+        Diagnostic::new(
+            TextRange::empty(TextSize::new(0)),
+            format!("the source is over the parser limit of {limit} bytes"),
+        )
+    })
+}
+
+pub(crate) fn oversized(src: &str) -> Option<(GreenNode, Vec<Diagnostic>)> {
+    limited_tree(src, u32::MAX as usize)
+}
+
+fn limited_tree(src: &str, limit: usize) -> Option<(GreenNode, Vec<Diagnostic>)> {
+    let diagnostic = source_limit(src, limit)?;
+    let mut builder = GreenNodeBuilder::new();
+    builder.start_node(ROOT.into());
+    builder.finish_node();
+    Some((builder.finish(), vec![diagnostic]))
+}
+
+#[test]
+fn parser_limit_rejects_before_building_a_cst() {
+    assert!(limited_tree("é", 2).is_none());
+    let (green, diagnostics) = limited_tree("éa", 2).unwrap();
+    assert_eq!(green.text_len(), TextSize::new(0));
+    assert_eq!(diagnostics.len(), 1);
+    assert!(diagnostics[0].message.contains("limit of 2 bytes"));
+    assert_eq!(diagnostics[0].range, TextRange::empty(TextSize::new(0)));
+    assert_eq!(offset(usize::MAX), TextSize::new(u32::MAX));
 }
 
 /// The length of a block's content up to its closing `}`, counting the braces nested in it and
@@ -263,11 +296,13 @@ pub(crate) fn split_br(s: &str) -> Vec<String> {
 
 impl<'a> Base<'a> {
     pub fn new(src: &'a str) -> Self {
+        let diagnostic = source_limit(src, u32::MAX as usize);
+        let src = if diagnostic.is_some() { "" } else { src };
         Base {
             src,
             pos: 0,
             builder: GreenNodeBuilder::new(),
-            diagnostics: Vec::new(),
+            diagnostics: diagnostic.into_iter().collect(),
             directive: Next::default(),
         }
     }

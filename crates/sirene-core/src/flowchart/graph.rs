@@ -49,10 +49,8 @@ impl Flowchart {
     /// The layout graph of this chart: node `i` is `nodes[i]`, cluster `i` is `subgraphs[i]`,
     /// edge `i` is `edges[i]`, and note `i` is the `i`th note whose target is a node.
     ///
-    /// # Panics
-    ///
-    /// If an edge endpoint is neither a node nor a subgraph, which lowering never produces.
-    pub fn layout_graph(&self, measure: &impl Measure) -> Graph {
+    /// Returns an error if an edge endpoint is neither a node nor a subgraph.
+    pub fn layout_graph(&self, measure: &impl Measure) -> crate::Result<Graph> {
         let nodes: HashMap<&str, usize> = self
             .nodes
             .iter()
@@ -91,13 +89,17 @@ impl Flowchart {
             }
             self.direction
         };
-        let item = |id: &str| -> Item {
+        let item = |id: &str| -> crate::Result<Item> {
             match clusters.get(id) {
-                Some(&c) => Item::Cluster(c),
-                None => Item::Node(*nodes.get(id).expect("edge endpoint exists")),
+                Some(&c) => Ok(Item::Cluster(c)),
+                None => nodes
+                    .get(id)
+                    .copied()
+                    .map(Item::Node)
+                    .ok_or_else(|| crate::Error::new(format!("unknown edge endpoint `{id}`"))),
             }
         };
-        Graph {
+        Ok(Graph {
             direction: self.direction,
             nodes: self
                 .nodes
@@ -132,12 +134,12 @@ impl Flowchart {
                 .edges
                 .iter()
                 .map(|e| {
-                    let (from, to) = (item(&e.from), item(&e.to));
+                    let (from, to) = (item(&e.from)?, item(&e.to)?);
                     let anchor = |end: Item, row: Option<usize>| match end {
                         Item::Node(n) => measure.row(&self.nodes[n], row?),
                         Item::Cluster(_) => None,
                     };
-                    EdgeSpec {
+                    Ok(EdgeSpec {
                         from,
                         to,
                         min_len: u32::from(e.length),
@@ -145,9 +147,9 @@ impl Flowchart {
                         constraint: e.constraint,
                         ports: e.ports,
                         anchors: [anchor(from, e.rows[0]), anchor(to, e.rows[1])],
-                    }
+                    })
                 })
-                .collect(),
+                .collect::<crate::Result<_>>()?,
             notes: self
                 .placed_notes()
                 .map(|(target, n)| NoteSpec {
@@ -192,6 +194,6 @@ impl Flowchart {
                         .collect()
                 })
                 .collect(),
-        }
+        })
     }
 }

@@ -252,7 +252,8 @@ fn project(desired: &[f64], weights: &[f64], seps: &[f64]) -> Vec<f64> {
                 break;
             }
             blocks.pop();
-            *blocks.last_mut().expect("two blocks") = (a.0 + b.0, a.1 + b.1, a.2 + b.2);
+            let n = blocks.len() - 1;
+            blocks[n] = (a.0 + b.0, a.1 + b.1, a.2 + b.2);
         }
     }
     let mut out = Vec::with_capacity(desired.len());

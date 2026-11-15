@@ -155,10 +155,10 @@ fn scale(c: &mut Criterion) {
                 b.iter(|| diagram::lower(black_box(src)));
             });
             group.bench_with_input(BenchmarkId::new("scene", n), &lowered, |b, l| {
-                b.iter(|| l.diagram.scene(&Approx, &Theme::LIGHT));
+                b.iter(|| l.diagram.scene(&Approx, &Theme::LIGHT).unwrap());
             });
             group.bench_with_input(BenchmarkId::new("ascii", n), &lowered, |b, l| {
-                b.iter(|| l.diagram.ascii(&Options::default()));
+                b.iter(|| l.diagram.ascii(&Options::default()).unwrap());
             });
         }
         group.finish();
@@ -190,7 +190,7 @@ fn layout_scale(c: &mut Criterion) {
             ..Graph::default()
         };
         group.bench_with_input(BenchmarkId::new("lanes", n), &lanes, |b, g| {
-            b.iter(|| layout::layout(black_box(g), &sirene_core::ascii::CONFIG))
+            b.iter(|| layout::layout(black_box(g), &sirene_core::ascii::CONFIG).unwrap())
         });
         let fan = Graph {
             nodes: (0..=n)
@@ -214,7 +214,7 @@ fn layout_scale(c: &mut Criterion) {
             ..Graph::default()
         };
         group.bench_with_input(BenchmarkId::new("ordered_fan", n), &fan, |b, g| {
-            b.iter(|| layout::layout(black_box(g), &sirene_core::ascii::CONFIG))
+            b.iter(|| layout::layout(black_box(g), &sirene_core::ascii::CONFIG).unwrap())
         });
     }
     group.finish();
@@ -268,7 +268,7 @@ fn treemap_text(c: &mut Criterion) {
             let lowered = diagram::lower(&src);
             assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
             group.bench_with_input(BenchmarkId::new(name, n), &lowered, |b, l| {
-                b.iter(|| black_box(l).diagram.scene(&Approx, &Theme::LIGHT));
+                b.iter(|| black_box(l).diagram.scene(&Approx, &Theme::LIGHT).unwrap());
             });
         }
     }

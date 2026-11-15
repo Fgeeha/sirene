@@ -31,7 +31,10 @@ pub(crate) fn lower(root: &SyntaxNode) -> (Pie, Vec<Diagnostic>) {
                 };
                 let text = label.text();
                 let label = text[1..text.len() - 1].to_owned();
-                let value: f64 = number.text().parse().expect("a lexed number parses");
+                let Ok(value) = number.text().parse::<f64>() else {
+                    diagnostics.push(Diagnostic::new(number.text_range(), "invalid slice value"));
+                    continue;
+                };
                 if value < 0.0 {
                     diagnostics.push(Diagnostic::new(
                         number.text_range(),

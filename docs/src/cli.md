@@ -192,16 +192,32 @@ stderr:
 
 ```
 $ sirene -v svg diagram.mmd -o diagram.svg
-[     0.0ms] sirene: sirene 0.1.1 (linux, x86_64): ...
-[     0.1ms] sirene: rendering 1 file(s)
-[     0.1ms] sirene: reading diagram.mmd
-[     0.2ms] sirene: read diagram.mmd: 23 bytes
-[     0.4ms] sirene_core::flowchart: parsed 23 bytes, 2 lines; 0 syntax diagnostics
-[     0.5ms] sirene_core::flowchart: lowered 2 nodes, 1 edges, 0 subgraphs, 0 class definitions; 0 diagnostics
-[     0.5ms] sirene: parsed and lowered in 357.7µs
-[     0.7ms] sirene_core::layout: laid out 2 nodes, 0 clusters, 1 edges (1 routed) in 34x114 cells, 147.4µs
-[     0.8ms] sirene_core::scene::paint: drew a 65x145 scene of 6 elements
-[     0.9ms] sirene: rendered 731 bytes in 327.9µs
-[     0.9ms] sirene: writing diagram.svg
-[     1.0ms] sirene: exit with success
+[     0.0ms] DEBUG sirene: sirene 0.4.1-dev (linux, x86_64): ...
+[     0.1ms] DEBUG sirene: rendering 1 file(s)
+[     0.1ms] DEBUG sirene: reading diagram.mmd
+[     0.2ms] DEBUG sirene: read diagram.mmd: 23 bytes
+[     0.4ms] DEBUG sirene_core::flowchart: parsed 23 bytes, 2 lines; 0 syntax diagnostics
+[     0.5ms] DEBUG sirene_core::flowchart: lowered 2 nodes, 1 edges, 0 subgraphs, 0 class definitions; 0 diagnostics
+[     0.5ms] DEBUG sirene: parsed and lowered in 357.7µs
+[     0.7ms] DEBUG sirene_core::layout: laid out 2 nodes, 0 clusters, 1 edges (1 routed) in 34x114 cells, 147.4µs
+[     0.8ms] DEBUG sirene_core::scene::paint: drew a 65x145 scene of 6 elements
+[     0.9ms] DEBUG sirene: rendered 731 bytes in 327.9µs
+[     0.9ms] DEBUG sirene: writing diagram.svg
+[     1.0ms] DEBUG sirene: exit with success
 ```
+
+Repeat the flag (`-vv`) for trace logging. For GUI launches and scripts, logging can also be
+enabled through the environment:
+
+```sh
+SIRENE_LOG=debug sirene diagram.mmd
+SIRENE_LOG=sirene_core=trace,sirene_gui=debug sirene diagram.mmd
+```
+
+`SIRENE_LOG` takes precedence over `RUST_LOG`. Comma-separated directives accept `off`,
+`error`, `warn`, `info`, `debug`, or `trace`, optionally prefixed by a module name and `=`.
+The most specific module filter wins. Verbose flags override the general environment level
+but keep explicit module filters. General levels apply to sirene's own crates; an explicit
+module filter can enable a dependency. Invalid configuration prints an error and exits 2.
+Logs go to stderr, leaving rendered stdout unchanged. No extra logs are printed without flags
+or environment configuration. Operational errors include their underlying causes.

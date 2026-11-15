@@ -59,7 +59,7 @@ fn errors() {
 fn drawing() {
     let src = "info\n  title T\n";
     let d = diagram::lower(src).diagram;
-    let s = d.scene(&Approx, &Theme::LIGHT);
+    let s = d.scene(&Approx, &Theme::LIGHT).unwrap();
     let texts: Vec<(&str, f32)> = s
         .elements
         .iter()
@@ -75,13 +75,18 @@ fn drawing() {
     assert!(texts[0].1 < texts[1].1);
     assert!(s.width >= 400.0);
     for charset in [Charset::Unicode, Charset::Ascii] {
-        assert_eq!(d.ascii(&Options { charset }), format!("T\n\n{version}\n"));
+        assert_eq!(
+            d.ascii(&Options { charset }).unwrap(),
+            format!("T\n\n{version}\n")
+        );
     }
     let plain = diagram::lower("info\n").diagram;
     assert_eq!(
-        plain.ascii(&Options {
-            charset: Charset::Ascii
-        }),
+        plain
+            .ascii(&Options {
+                charset: Charset::Ascii
+            })
+            .unwrap(),
         format!("{version}\n")
     );
 }

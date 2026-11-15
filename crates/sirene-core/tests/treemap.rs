@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -209,7 +217,10 @@ fn drawing() {
     let cells = t.layout();
     let area = |i: usize| (cells[i].x1 - cells[i].x0) * (cells[i].y1 - cells[i].y0);
     assert!(area(1) > 2.5 * area(2) && area(1) < 3.5 * area(2));
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     let at = |want: &str| t.iter().find(|(x, ..)| x == want).unwrap().clone();
     let (section, big, small) = (at("S"), at("big"), at("small"));

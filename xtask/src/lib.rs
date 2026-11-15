@@ -1,3 +1,14 @@
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
 //! Packaging tasks: the macOS app bundle, its icon, and the Homebrew cask (`spec/macos-packaging.md`),
 //! and release archive signing (`spec/self-update.md`).
 
@@ -10,6 +21,7 @@ use clap::{Parser, Subcommand};
 use icns::{IconFamily, IconType, Image};
 use plist::{Dictionary, Value};
 use resvg::{tiny_skia, usvg};
+use sirene_core::{Error, Result};
 
 /// The app's display name and bundle directory stem.
 pub const APP: &str = "Sirene";
@@ -93,33 +105,33 @@ enum Command {
 }
 
 /// Runs the command line `args` (including the program name), printing to `out`.
-pub fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), String> {
+pub fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<()> {
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(e) if !e.use_stderr() => {
-            return write!(out, "{}", e.render()).map_err(|e| e.to_string());
+            return write!(out, "{}", e.render()).map_err(Error::from);
         }
-        Err(e) => return Err(e.render().to_string()),
+        Err(e) => return Err(Error::with_source("invalid arguments", e)),
     };
     let default_out = || Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/bundle");
     match cli.command {
         Command::Bundle { binary, out: dir } => {
             let app = bundle(&binary, &dir.unwrap_or_else(default_out))?;
-            writeln!(out, "{}", app.display()).map_err(|e| e.to_string())
+            writeln!(out, "{}", app.display()).map_err(Error::from)
         }
         Command::Icon { out: dir } => {
             let dir = dir.unwrap_or_else(default_out);
             write_icon(&dir)?;
-            writeln!(out, "{}", dir.join("sirene.icns").display()).map_err(|e| e.to_string())
+            writeln!(out, "{}", dir.join("sirene.icns").display()).map_err(Error::from)
         }
         Command::Cask {
             url,
             sha256,
             homepage,
-        } => write!(out, "{}", cask(VERSION, &url, &sha256, &homepage)?).map_err(|e| e.to_string()),
+        } => write!(out, "{}", cask(VERSION, &url, &sha256, &homepage)?).map_err(Error::from),
         Command::GenKey { out: dir } => {
             let (private, public) = gen_key(&dir)?;
-            writeln!(out, "{}\n{}", private.display(), public.display()).map_err(|e| e.to_string())
+            writeln!(out, "{}\n{}", private.display(), public.display()).map_err(Error::from)
         }
         Command::Sign {
             key,
@@ -129,7 +141,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Re
             let key = signing_key(&key, &public)?;
             for a in &archives {
                 sign(&key, a)?;
-                writeln!(out, "signed {}", a.display()).map_err(|e| e.to_string())?;
+                writeln!(out, "signed {}", a.display()).map_err(Error::from)?;
             }
             Ok(())
         }
@@ -203,9 +215,9 @@ fn version_core(version: &str) -> &str {
 }
 
 /// Renders the icon (MACOSP-4) as a square PNG of `size` pixels.
-pub fn icon_png(size: u32) -> Result<Vec<u8>, String> {
+pub fn icon_png(size: u32) -> Result<Vec<u8>> {
     let tree = usvg::Tree::from_str(ICON_SVG, &usvg::Options::default())
-        .map_err(|e| format!("cannot parse the icon: {e}"))?;
+        .map_err(|e| Error::with_source("cannot parse the icon", e))?;
     let mut pixmap =
         tiny_skia::Pixmap::new(size, size).ok_or_else(|| format!("bad icon size {size}"))?;
     let scale = size as f32 / tree.size().width();
@@ -214,25 +226,30 @@ pub fn icon_png(size: u32) -> Result<Vec<u8>, String> {
         tiny_skia::Transform::from_scale(scale, scale),
         &mut pixmap.as_mut(),
     );
-    pixmap.encode_png().map_err(|e| e.to_string())
+    pixmap
+        .encode_png()
+        .map_err(|e| Error::with_source("cannot encode the icon PNG", e))
 }
 
 /// The icon (MACOSP-4) as an `.icns` file.
-pub fn icns() -> Result<Vec<u8>, String> {
+pub fn icns() -> Result<Vec<u8>> {
     let mut family = IconFamily::new();
     for (slot, size) in ICON_SLOTS {
-        let image = Image::read_png(Cursor::new(icon_png(size)?)).map_err(|e| e.to_string())?;
+        let image = Image::read_png(Cursor::new(icon_png(size)?))
+            .map_err(|e| Error::with_source("cannot read the icon PNG", e))?;
         family
             .add_icon_with_type(&image, slot)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Error::with_source("cannot add the icon slot", e))?;
     }
     let mut bytes = Vec::new();
-    family.write(&mut bytes).map_err(|e| e.to_string())?;
+    family
+        .write(&mut bytes)
+        .map_err(|e| Error::with_source("cannot write the icon family", e))?;
     Ok(bytes)
 }
 
 /// Writes `sirene.icns` and a 1024 pixel `sirene.png` into `dir`.
-pub fn write_icon(dir: &Path) -> Result<(), String> {
+pub fn write_icon(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir).map_err(|e| context(dir, e))?;
     write(&dir.join("sirene.icns"), &icns()?)?;
     write(&dir.join("sirene.png"), &icon_png(1024)?)
@@ -249,7 +266,7 @@ pub const LICENSES: [(&str, &str); 3] = [
 ];
 
 /// Writes `dir/Sirene.app` around `binary` (MACOSP-1) and returns its path.
-pub fn bundle(binary: &Path, dir: &Path) -> Result<PathBuf, String> {
+pub fn bundle(binary: &Path, dir: &Path) -> Result<PathBuf> {
     // Read the binary before removing the old bundle, which may hold it.
     let exe_bytes = fs::read(binary).map_err(|e| context(binary, e))?;
     let app = dir.join(format!("{APP}.app"));
@@ -273,7 +290,7 @@ pub fn bundle(binary: &Path, dir: &Path) -> Result<PathBuf, String> {
     let mut plist = Vec::new();
     info_plist()
         .to_writer_xml(&mut plist)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Error::with_source("cannot encode Info.plist", e))?;
     write(&contents.join("Info.plist"), &plist)?;
     write(&contents.join("PkgInfo"), b"APPL????")?;
     write(&resources.join("sirene.icns"), &icns()?)?;
@@ -284,13 +301,15 @@ pub fn bundle(binary: &Path, dir: &Path) -> Result<PathBuf, String> {
 }
 
 /// A Homebrew cask for version `version` of a zip of the bundle (MACOSP-5).
-pub fn cask(version: &str, url: &str, sha256: &str, homepage: &str) -> Result<String, String> {
+pub fn cask(version: &str, url: &str, sha256: &str, homepage: &str) -> Result<String> {
     if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(format!("not a SHA-256 checksum: {sha256:?}"));
+        return Err(Error::new(format!("not a SHA-256 checksum: {sha256:?}")));
     }
     for (name, s) in [("version", version), ("url", url), ("homepage", homepage)] {
         if s.contains(['"', '\\', '#']) || s.chars().any(char::is_control) {
-            return Err(format!("{name} cannot be quoted in a cask: {s:?}"));
+            return Err(Error::new(format!(
+                "{name} cannot be quoted in a cask: {s:?}"
+            )));
         }
     }
     let sha256 = sha256.to_ascii_lowercase();
@@ -316,16 +335,19 @@ end
 /// Writes a new zipsign key pair: `release.key`, the 64-byte signing key pair for the release
 /// workflow's `ZIPSIGN_KEY` secret, and `release.pub`, the 32-byte verifying key `sirene update`
 /// embeds. Refuses to overwrite either. Returns the two paths.
-pub fn gen_key(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+pub fn gen_key(dir: &Path) -> Result<(PathBuf, PathBuf)> {
     let (private, public) = (dir.join("release.key"), dir.join("release.pub"));
     for p in [&private, &public] {
         if p.exists() {
-            return Err(format!("{} exists; not overwriting it", p.display()));
+            return Err(Error::new(format!(
+                "{} exists; not overwriting it",
+                p.display()
+            )));
         }
     }
     // An ed25519 secret key is 32 random bytes.
     let mut seed = [0u8; 32];
-    getrandom::fill(&mut seed).map_err(|e| format!("could not read random bytes: {e}"))?;
+    getrandom::fill(&mut seed).map_err(|e| Error::with_source("could not read random bytes", e))?;
     let key = zipsign_api::SigningKey::from_bytes(&seed);
     fs::create_dir_all(dir).map_err(|e| context(dir, e))?;
     write_private_new(&private, &key.to_keypair_bytes())?;
@@ -335,17 +357,20 @@ pub fn gen_key(dir: &Path) -> Result<(PathBuf, PathBuf), String> {
 
 /// The signing key pair in `key`, checked against the verifying key in `public`, so a key that
 /// `sirene update` would not accept signs nothing.
-pub fn signing_key(key: &Path, public: &Path) -> Result<zipsign_api::SigningKey, String> {
-    let mut keys = zipsign_api::sign::read_signing_keys([fs::File::open(key)])
-        .map_err(|e| format!("{}: {e}", key.display()))?;
+pub fn signing_key(key: &Path, public: &Path) -> Result<zipsign_api::SigningKey> {
+    let keys = zipsign_api::sign::read_signing_keys([fs::File::open(key)])
+        .map_err(|e| Error::with_source(key.display().to_string(), e))?;
     let expected = fs::read(public).map_err(|e| context(public, e))?;
-    let key = keys.remove(0);
+    let key = keys
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::new("no signing key was read"))?;
     if key.verifying_key().as_bytes()[..] != expected[..] {
-        return Err(format!(
+        return Err(Error::new(format!(
             "{}: not the key pair of the verifying key in {}",
             key_name(key.verifying_key().as_bytes()),
             public.display()
-        ));
+        )));
     }
     Ok(key)
 }
@@ -358,7 +383,7 @@ fn key_name(public: &[u8]) -> String {
 
 /// Signs the `.tar.gz` `archive` in place with `key`, as `self_update` verifies it: over the
 /// archive's bytes, with its file name as the context.
-pub fn sign(key: &zipsign_api::SigningKey, archive: &Path) -> Result<(), String> {
+pub fn sign(key: &zipsign_api::SigningKey, archive: &Path) -> Result<()> {
     let keys = std::slice::from_ref(key);
     let name = archive
         .file_name()
@@ -373,7 +398,7 @@ pub fn sign(key: &zipsign_api::SigningKey, archive: &Path) -> Result<(), String>
         keys,
         Some(name.as_bytes()),
     )
-    .map_err(|e| format!("{}: {e}", archive.display()))?;
+    .map_err(|e| Error::with_source(archive.display().to_string(), e))?;
     let parent = archive
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -392,11 +417,11 @@ pub fn sign(key: &zipsign_api::SigningKey, archive: &Path) -> Result<(), String>
         .map_err(|e| context(archive, e.error))
 }
 
-fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::write(path, bytes).map_err(|e| context(path, e))
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -405,7 +430,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     f.write_all(bytes).map_err(|e| context(path, e))
 }
 
-fn write_private_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn write_private_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -417,8 +442,8 @@ fn write_private_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     f.write_all(bytes).map_err(|e| context(path, e))
 }
 
-fn context(path: &Path, e: io::Error) -> String {
-    format!("{}: {e}", path.display())
+fn context(path: &Path, e: io::Error) -> Error {
+    Error::with_source(path.display().to_string(), e)
 }
 
 #[cfg(test)]
@@ -442,11 +467,11 @@ mod tests {
         let ok = "0".repeat(64);
         for bad in ["a\"b", "a\\b", "a#{b}", "a\nb"] {
             let e = cask(bad, "u", &ok, "h").unwrap_err();
-            assert!(e.starts_with("version "), "{e}");
+            assert!(e.report().starts_with("version "), "{e}");
             let e = cask("1", bad, &ok, "h").unwrap_err();
-            assert!(e.starts_with("url "), "{e}");
+            assert!(e.report().starts_with("url "), "{e}");
             let e = cask("1", "u", &ok, bad).unwrap_err();
-            assert!(e.starts_with("homepage "), "{e}");
+            assert!(e.report().starts_with("homepage "), "{e}");
         }
     }
 
@@ -466,6 +491,7 @@ mod tests {
         assert!(
             gen_key(dir.path())
                 .unwrap_err()
+                .report()
                 .ends_with("exists; not overwriting it")
         );
         let public: self_update::VerifyingKey = fs::read(&public_path).unwrap().try_into().unwrap();
@@ -474,7 +500,10 @@ mod tests {
         let other: self_update::VerifyingKey = fs::read(&other_path).unwrap().try_into().unwrap();
         // A key pair is checked against the verifying key it must match.
         let e = signing_key(&other_private, &public_path).err().unwrap();
-        assert!(e.contains("not the key pair of the verifying key"), "{e}");
+        assert!(
+            e.report().contains("not the key pair of the verifying key"),
+            "{e}"
+        );
         let key = signing_key(&private, &public_path).unwrap();
 
         let archive = dir
@@ -505,7 +534,7 @@ mod tests {
         assert!(self_update::verify_signature(&archive, &[public]).is_err());
 
         let e = sign(&key, &dir.path().join("a.zip")).unwrap_err();
-        assert!(e.ends_with("not a .tar.gz file name"), "{e}");
+        assert!(e.report().ends_with("not a .tar.gz file name"), "{e}");
     }
 
     fn signing_fixture() -> (tempfile::TempDir, zipsign_api::SigningKey, PathBuf) {
@@ -559,6 +588,6 @@ mod tests {
 
     #[test]
     fn bad_icon_size() {
-        assert_eq!(icon_png(0).unwrap_err(), "bad icon size 0");
+        assert_eq!(icon_png(0).unwrap_err().report(), "bad icon size 0");
     }
 }

@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 
 use rowan::TextRange;
 
-use super::parser::KINDS;
 use crate::diagnostic::Diagnostic;
 use crate::flowchart::text;
 use crate::flowchart::{
@@ -194,7 +193,6 @@ impl Lowerer {
         };
         let kind = kw.text().to_ascii_lowercase();
         let element = kind == "element";
-        debug_assert!(KINDS.contains(&kind.as_str()));
         let id = value(&name);
         // As in Mermaid, the first definition of a name is kept.
         if !self.defined.insert(id.clone()) {
@@ -375,6 +373,7 @@ impl Lowerer {
 
 #[cfg(test)]
 mod tests {
+    use super::super::parser::KINDS;
     use super::*;
 
     #[test]

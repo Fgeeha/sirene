@@ -109,7 +109,8 @@ fn text_drawing() {
         &Options {
             charset: Charset::Unicode,
         },
-    );
+    )
+    .unwrap();
     let expected = "             ╭────────╮    ┌─ Report ───────────┐
 ┌───────┐    │ Ingest │    │  ┌────┐    ┌────┐  │    ┌──────┐
 │ start ├───►│┄┄┄┄┄┄┄┄├────┼─►│ b1 ├───►│ b2 ├──┼───►│ done │
@@ -121,7 +122,7 @@ fn text_drawing() {
 #[test]
 fn scene_owners_map_to_the_original() {
     let chart = chart(SRC);
-    let s = scene::flowchart(&chart, &Approx, &Theme::LIGHT);
+    let s = scene::flowchart(&chart, &Approx, &Theme::LIGHT).unwrap();
     let one = chart.subgraphs.iter().position(|s| s.id == "one").unwrap();
     let texts: Vec<(Owner, &str)> = s
         .elements

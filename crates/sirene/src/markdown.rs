@@ -3,10 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
-use sirene_core::Severity;
 use sirene_core::ascii::{Charset, Options};
 use sirene_core::diagram::{self, Lowered};
 use sirene_core::markdown::{self, Block};
+use sirene_core::{Error, Result, Severity};
 
 /// Prints `lowered`'s diagnostics as `NAME:LINE:COL: SEVERITY: MESSAGE`, with each position
 /// moved by `at`. Returns whether there was an error.
@@ -27,7 +27,7 @@ pub fn report(
             }
             Severity::Warning => "warning",
         };
-        eprintln!("{name}:{line}:{col}: {severity}: {}", d.message);
+        diagnostic!("{name}:{line}:{col}: {severity}: {}", d.message);
     }
     errors
 }
@@ -41,33 +41,39 @@ pub fn check(path: &Path) -> bool {
     }
     if path.is_dir() {
         if let Err(e) = std::fs::read_dir(path) {
-            eprintln!("error: cannot read {}: {e}", path.display());
+            diagnostic!("error: cannot read {}: {e}", path.display());
             return false;
         }
-        let found = crate::scan(path, path, "mmd");
-        if found.is_empty() {
-            eprintln!("{}", crate::no_diagrams(path));
+        let scanned = crate::scan(path, path, "mmd");
+        for error in &scanned.errors {
+            diagnostic!("error: {}", error.report());
+        }
+        if scanned.found.is_empty() {
+            if scanned.errors.is_empty() {
+                diagnostic!("{}", crate::no_diagrams(path));
+            }
             return false;
         }
-        let failed = found
+        let failed = scanned
+            .found
             .iter()
             .filter(|(input, _)| !check_source(Some(input)))
             .count();
-        return failed == 0;
+        return failed == 0 && scanned.errors.is_empty();
     }
     if markdown::is_markdown(path) {
         let name = path.display().to_string();
         let src = match crate::read_text(path) {
             Ok(src) => src,
             Err(e) => {
-                eprintln!("error: {e}");
+                diagnostic!("error: {}", e.report());
                 return false;
             }
         };
         let blocks = markdown::mermaid_blocks(&src);
         log::debug!("{name}: {} diagram block(s)", blocks.len());
         if blocks.is_empty() {
-            eprintln!("{name}: no diagram blocks");
+            diagnostic!("{name}: no diagram blocks");
         }
         let mut ok = true;
         for block in &blocks {
@@ -87,7 +93,7 @@ fn check_source(path: Option<&Path>) -> bool {
             !report(&name, &src, &lowered, |l, c| (l, c))
         }
         Err(message) => {
-            eprintln!("error: {message}");
+            diagnostic!("error: {}", message.report());
             false
         }
     }
@@ -230,13 +236,13 @@ pub fn print_ascii(md: &Path, charset: Charset) -> bool {
     let src = match crate::read_text(md) {
         Ok(src) => src,
         Err(e) => {
-            eprintln!("error: {e}");
+            diagnostic!("error: {}", e.report());
             return false;
         }
     };
     let blocks = markdown::mermaid_blocks(&src);
     if blocks.is_empty() {
-        eprintln!("{name}: no diagram blocks");
+        diagnostic!("{name}: no diagram blocks");
     }
     let mut ok = true;
     let mut out = String::new();
@@ -246,14 +252,31 @@ pub fn print_ascii(md: &Path, charset: Charset) -> bool {
         if i > 0 {
             out.push('\n');
         }
-        out.push_str(&lowered.diagram.ascii(&Options { charset }));
+        match lowered.diagram.ascii(&Options { charset }) {
+            Ok(drawing) => out.push_str(&drawing),
+            Err(e) => {
+                diagnostic!(
+                    "error: {}",
+                    e.context(format!("cannot render {name} block {}", i + 1))
+                        .report()
+                );
+                ok = false;
+            }
+        }
         if !out.ends_with('\n') {
             out.push('\n');
         }
     }
     use std::io::Write;
-    if let Err(e) = std::io::stdout().write_all(out.as_bytes()) {
-        eprintln!("error: cannot write the drawing: {e}");
+    let mut stdout = std::io::stdout().lock();
+    if let Err(e) = stdout
+        .write_all(out.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        diagnostic!(
+            "error: {}",
+            Error::with_source("cannot write the drawing", e).report()
+        );
         return false;
     }
     ok
@@ -267,32 +290,32 @@ pub fn render(
     out: Option<&Path>,
     ext: &str,
     link: bool,
-    render: &impl Fn(&Lowered) -> Result<Vec<u8>, String>,
+    render: &impl Fn(&Lowered) -> Result<Vec<u8>>,
 ) -> bool {
     let name = md.display().to_string();
     let src = match crate::read_text(md) {
         Ok(src) => src,
         Err(e) => {
-            eprintln!("error: {e}");
+            diagnostic!("error: {}", e.report());
             return false;
         }
     };
     if let Some(dir) = out {
         if dir.exists() && !dir.is_dir() {
-            eprintln!(
+            diagnostic!(
                 "error: {} is not a directory; a Markdown file renders one image per block into one",
                 dir.display()
             );
             return false;
         }
         if let Err(e) = std::fs::create_dir_all(dir) {
-            eprintln!("error: cannot create {}: {e}", dir.display());
+            diagnostic!("error: cannot create {}: {e}", dir.display());
             return false;
         }
     }
     let blocks = markdown::mermaid_blocks(&src);
     if blocks.is_empty() {
-        eprintln!("{name}: no diagram blocks");
+        diagnostic!("{name}: no diagram blocks");
     }
     let mut ok = true;
     let mut links = Vec::new();
@@ -303,15 +326,15 @@ pub fn render(
         let image = image_path(md, out, n, ext);
         let written = render(&lowered).and_then(|bytes| {
             crate::write_file(&image, &bytes, false)
-                .map_err(|e| format!("cannot write {}: {e}", image.display()))
+                .map_err(|e| Error::with_source(format!("cannot write {}", image.display()), e))
         });
         match written {
             Ok(()) => {
-                eprintln!("wrote {}", image.display());
+                diagnostic!("wrote {}", image.display());
                 links.push((block, Some(link_line(md, &image, n))));
             }
             Err(message) => {
-                eprintln!("error: {message}");
+                diagnostic!("error: {}", message.report());
                 ok = false;
                 links.push((block, None));
             }
@@ -321,10 +344,10 @@ pub fn render(
         let linked = with_links(&src, &links);
         if linked != src {
             if let Err(e) = crate::write_file(md, linked.as_bytes(), true) {
-                eprintln!("error: cannot write {name}: {e}");
+                diagnostic!("error: cannot write {name}: {e}");
                 return false;
             }
-            eprintln!("linked the images in {name}");
+            diagnostic!("linked the images in {name}");
         }
     }
     ok

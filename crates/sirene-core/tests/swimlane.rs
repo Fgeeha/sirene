@@ -71,7 +71,7 @@ fn snapshots() {
             for charset in [Charset::Unicode, Charset::Ascii] {
                 let mut out = diagnostics(&src, &lowered);
                 out.push('\n');
-                out.push_str(&lowered.diagram.ascii(&Options { charset }));
+                out.push_str(&lowered.diagram.ascii(&Options { charset }).unwrap());
                 let kind = match charset {
                     Charset::Unicode => dir,
                     Charset::Ascii => "ascii",
@@ -79,7 +79,7 @@ fn snapshots() {
                 insta::assert_snapshot!(format!("{kind}__{name}"), out, &src);
             }
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
             }
         }
@@ -191,12 +191,13 @@ const SPACING: Spacing = Spacing {
 fn place(src: &str) -> (Flowchart, layout::Layout) {
     let (chart, _) = lowered(src);
     let l = layout::layout(
-        &chart.layout_graph(&Fixed),
+        &chart.layout_graph(&Fixed).unwrap(),
         &Config {
             vertical: SPACING,
             horizontal: SPACING,
         },
-    );
+    )
+    .unwrap();
     (chart, l)
 }
 

@@ -45,8 +45,8 @@ proptest! {
             prop_assert!(d.range.end() <= TextSize::of(src.as_str()), "{d:?}");
         }
         for charset in [Charset::Unicode, Charset::Ascii] {
-            lowered.diagram.ascii(&Options { charset });
+            lowered.diagram.ascii(&Options { charset }).unwrap();
         }
-        lowered.diagram.scene(&Approx, &Theme::LIGHT);
+        lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
     }
 }

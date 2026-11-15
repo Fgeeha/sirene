@@ -27,7 +27,7 @@ fn fixtures(dir: &str) -> Vec<(String, String)> {
 
 fn render(src: &str, charset: Charset) -> String {
     let chart = flowchart::parse(src).lower().flowchart;
-    ascii::render(&chart, &Options { charset })
+    ascii::render(&chart, &Options { charset }).unwrap()
 }
 
 #[test]

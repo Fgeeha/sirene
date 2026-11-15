@@ -359,16 +359,25 @@ impl Viewer {
     /// The drawing, built on first use after a change.
     pub fn scene(&mut self, window: &Window) -> Rc<Scene> {
         let theme = self.theme();
-        let doc = &self.doc;
-        self.scene
-            .get_or_insert_with(|| {
-                let metrics = Metrics {
-                    window,
-                    font: window.text_style().font(),
-                };
-                Rc::new(doc.scene(&metrics, &theme))
-            })
-            .clone()
+        if let Some(scene) = &self.scene {
+            return scene.clone();
+        }
+        let metrics = Metrics {
+            window,
+            font: window.text_style().font(),
+        };
+        let scene = match self.doc.scene(&metrics, &theme) {
+            Ok(scene) => scene,
+            Err(error) => {
+                let error = error.context("cannot draw the document");
+                log::error!("{}", error.report());
+                self.notice = Some(error.report());
+                crate::document::error_scene(&error, &theme)
+            }
+        };
+        let scene = Rc::new(scene);
+        self.scene = Some(scene.clone());
+        scene
     }
 
     /// The shape bar's icons, built on first use after the theme changes.
@@ -432,12 +441,15 @@ impl Viewer {
             &["Reload", "Cancel"],
             cx,
         );
-        cx.spawn_in(window, async move |this, cx| {
-            if let Ok(0) = answer.await {
+        cx.spawn_in(window, async move |this, cx| match answer.await {
+            Ok(0) => {
                 log::debug!("reload: discarding unsaved edits");
                 let _ = this.update_in(cx, |v, window, cx| v.reload_now(window, cx));
-            } else {
-                log::debug!("reload cancelled");
+            }
+            Ok(_) => log::debug!("reload cancelled"),
+            Err(error) => {
+                let error = sirene_core::Error::with_source("reload confirmation failed", error);
+                let _ = this.update(cx, |v, cx| v.report_error(error, cx));
             }
         })
         .detach();
@@ -499,8 +511,13 @@ impl Viewer {
                 this.update_in(cx, |v, window, cx| v.write_file(window, cx))
                     .unwrap_or(false)
             }
-            _ => {
+            Ok(_) => {
                 log::debug!("save cancelled");
+                false
+            }
+            Err(error) => {
+                let error = sirene_core::Error::with_source("overwrite confirmation failed", error);
+                let _ = this.update(cx, |v, cx| v.report_error(error, cx));
                 false
             }
         })
@@ -522,31 +539,50 @@ impl Viewer {
         };
         let chosen = cx.prompt_for_new_path(&dir, Some(&name));
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(path))) = chosen.await else {
-                log::debug!("save as cancelled");
-                return false;
+            let path = match crate::dialog_result(chosen.await, "save as dialog failed") {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    log::debug!("save as cancelled");
+                    return false;
+                }
+                Err(error) => {
+                    let _ = this.update(cx, |v, cx| v.report_error(error, cx));
+                    return false;
+                }
             };
             log::debug!("save as {}", path.display());
             // A Markdown file's block saved alone leaves the file's other edits unsaved.
-            let answer = this
-                .update_in(cx, |v, window, cx| {
-                    v.doc.save_as_drops_edits(&path).then(|| {
-                        window.prompt(
-                            PromptLevel::Warning,
-                            &format!("Save only the shown diagram, without {}?", v.doc.name()),
-                            Some("The unsaved edits to the Markdown file will be lost."),
-                            &["Save Diagram", "Cancel"],
-                            cx,
-                        )
-                    })
+            let answer = match this.update_in(cx, |v, window, cx| {
+                v.doc.save_as_drops_edits(&path).then(|| {
+                    window.prompt(
+                        PromptLevel::Warning,
+                        &format!("Save only the shown diagram, without {}?", v.doc.name()),
+                        Some("The unsaved edits to the Markdown file will be lost."),
+                        &["Save Diagram", "Cancel"],
+                        cx,
+                    )
                 })
-                .ok()
-                .flatten();
-            if let Some(answer) = answer
-                && !matches!(answer.await, Ok(0))
-            {
-                log::debug!("save as cancelled");
-                return false;
+            }) {
+                Ok(answer) => answer,
+                Err(error) => {
+                    log::error!("save as window no longer available: {error:#}");
+                    return false;
+                }
+            };
+            if let Some(answer) = answer {
+                match answer.await {
+                    Ok(0) => {}
+                    Ok(_) => {
+                        log::debug!("save as cancelled");
+                        return false;
+                    }
+                    Err(error) => {
+                        let error =
+                            sirene_core::Error::with_source("save as confirmation failed", error);
+                        let _ = this.update(cx, |v, cx| v.report_error(error, cx));
+                        return false;
+                    }
+                }
             }
             this.update_in(cx, |v, window, cx| {
                 let saved = v.doc.save_as(path.clone()).is_ok();
@@ -593,8 +629,13 @@ impl Viewer {
                 log::debug!("close: discarding unsaved edits");
                 true
             }
-            _ => {
+            Ok(_) => {
                 log::debug!("close cancelled");
+                false
+            }
+            Err(error) => {
+                let error = sirene_core::Error::with_source("close confirmation failed", error);
+                let _ = this.update(cx, |v, cx| v.report_error(error, cx));
                 false
             }
         })
@@ -607,7 +648,7 @@ impl Viewer {
             if confirmed.await {
                 log::debug!("closing the window");
                 let _ = cx.update(|window, cx| {
-                    settings::get(cx).save();
+                    settings::save(cx);
                     window.remove_window()
                 });
             }
@@ -622,7 +663,7 @@ impl Viewer {
     /// The platform asks before closing the window, e.g. from its title bar.
     pub fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.doc.is_edited() {
-            settings::get(cx).save();
+            settings::save(cx);
             return true;
         }
         self.close_when_confirmed(window, cx);
@@ -638,8 +679,14 @@ impl Viewer {
         }
         let chosen = cx.prompt_for_paths(crate::open_options());
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = chosen.await {
-                let _ = this.update_in(cx, |v, window, cx| v.show_paths(&paths, window, cx));
+            match crate::dialog_result(chosen.await, "open dialog failed") {
+                Ok(Some(paths)) => {
+                    let _ = this.update_in(cx, |v, window, cx| v.show_paths(&paths, window, cx));
+                }
+                Ok(None) => log::debug!("open cancelled"),
+                Err(error) => {
+                    let _ = this.update(cx, |v, cx| v.report_error(error, cx));
+                }
             }
         })
         .detach();
@@ -678,6 +725,13 @@ impl Viewer {
     /// The drawing area, in window coordinates, from the last paint.
     pub fn drawing_area(&self) -> Bounds<Pixels> {
         self.viewport.get()
+    }
+
+    /// Retains a failure in the status bar until the document next changes.
+    pub(crate) fn report_error(&mut self, error: sirene_core::Error, cx: &mut Context<Self>) {
+        log::error!("{}", error.report());
+        self.notice = Some(error.report());
+        cx.notify();
     }
 
     pub fn status(&self) -> String {
@@ -918,7 +972,11 @@ impl Render for Viewer {
                     .border_t_1()
                     .border_color(rule)
                     .items_center()
-                    .child(self.status())
+                    .child(
+                        settings::last_error(cx)
+                            .or_else(|| crate::last_app_error(cx))
+                            .map_or_else(|| self.status(), |e| e.report()),
+                    )
                     .child(
                         div()
                             .flex()

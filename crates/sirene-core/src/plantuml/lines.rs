@@ -22,8 +22,9 @@ impl Line {
             .checked_sub(base)
             .filter(|&at| at + part.len() <= self.text.len())
             .unwrap_or(0);
-        let start = self.range.start() + TextSize::try_from(at).expect("line fits");
-        TextRange::at(start, TextSize::try_from(part.len()).expect("line fits"))
+        // Both are offsets into a CST line, bounded by the parser's source limit.
+        let start = self.range.start() + TextSize::new(at as u32);
+        TextRange::at(start, TextSize::new(part.len() as u32))
     }
 
     /// The first word, lowercased.
@@ -120,17 +121,26 @@ pub(crate) fn read(root: &SyntaxNode) -> Vec<Line> {
 /// columns stay the source's. For the kinds read by another language's reader.
 pub(crate) fn body(root: &SyntaxNode, mut keep: impl FnMut(&Line) -> bool) -> String {
     let src = root.text().to_string();
-    let mut buf: Vec<u8> = src
-        .bytes()
-        .map(|b| if b == b'\n' { b'\n' } else { b' ' })
-        .collect();
+    let mut body = String::with_capacity(src.len());
+    let mut at = 0;
     for line in read(root) {
         if keep(&line) {
             let start = usize::from(line.range.start());
-            buf[start..start + line.text.len()].copy_from_slice(line.text.as_bytes());
+            body.extend(
+                src[at..start]
+                    .bytes()
+                    .map(|b| if b == b'\n' { '\n' } else { ' ' }),
+            );
+            body.push_str(&line.text);
+            at = start + line.text.len();
         }
     }
-    String::from_utf8(buf).expect("statements are whole characters")
+    body.extend(
+        src[at..]
+            .bytes()
+            .map(|b| if b == b'\n' { '\n' } else { ' ' }),
+    );
+    body
 }
 
 /// A PlantUML color (`#red`, `#LightBlue`, `#ff8800`, `red`) as `#rrggbb`; a gradient such as
@@ -734,5 +744,34 @@ mod tests {
         assert!(name("X as").is_none());
         assert!(name("X as \"\"").is_none());
         assert_eq!(name("X as Y").map(|n| n.0), Some("Y".into()));
+    }
+
+    /// ERRORH-1: retaining Unicode statement spans needs no fallible UTF-8 reconstruction.
+    #[test]
+    fn body_preserves_unicode_and_byte_offsets() {
+        let src = "@startjson\n' 日本 comment\n{\"name\":\"日本\"}\n@endjson\n";
+        let root = crate::plantuml::parse(src).syntax();
+        let text = body(&root, |line| line.text.starts_with('{'));
+        assert_eq!(text.len(), src.len());
+        let json = "{\"name\":\"日本\"}";
+        let at = src.find(json).unwrap();
+        assert_eq!(&text[at..at + json.len()], json);
+        for (i, byte) in text.bytes().enumerate() {
+            if !(at..at + json.len()).contains(&i) {
+                assert_eq!(
+                    byte,
+                    if src.as_bytes()[i] == b'\n' {
+                        b'\n'
+                    } else {
+                        b' '
+                    }
+                );
+            }
+        }
+        assert!(
+            body(&root, |_| false)
+                .bytes()
+                .all(|b| b == b' ' || b == b'\n')
+        );
     }
 }

@@ -75,14 +75,19 @@ subcommands work as above, and running with no subcommand prints
 ## CLI-8 Verbose output
 
 `-v, --verbose`, before or after the subcommand, prints a line to stderr for each step, as
-`[ELAPSEDms] TARGET: MESSAGE` where TARGET is the module that logged it: the version and
+`[ELAPSEDms] LEVEL TARGET: MESSAGE` where TARGET is the module that logged it: the version and
 parsed command; reading the input (path or `<stdin>`, size); parsing and lowering (sizes, item
 and diagnostic counts, time); layout (counts, size in cells, time); the scene and PNG encoding;
 the bytes rendered and where they are written; and the exit status. In the GUI it also reports
 opening files and windows, a file already open, ignored `file://` URLs, changes found on disk,
 reloads, saves (including writing in place when the owner cannot be kept), and the answers to
-the Reload, Overwrite, Save, and Quit questions. Only sirene's own crates log; stdout is
-unchanged, and without the flag nothing extra is printed. Tests: `verbose_reports_each_step`
+the Reload, Overwrite, Save, and Quit questions. Repeated verbosity (`-vv`) enables trace.
+`SIRENE_LOG` (preferred) or `RUST_LOG` also enables logging, with a level or comma-separated
+`TARGET=LEVEL` filters; the most specific target filter wins. Flags override the general
+environment level while retaining explicit target filters. Verbose defaults cover sirene's
+own crates; environment target filters can enable dependencies. Invalid logging configuration
+prints an error and exits 2. Stdout is unchanged, and without flags or environment configuration
+nothing extra is printed (ERRORH-6). Tests: `verbose_reports_each_step`
 in `crates/sirene/tests/cli.rs` and `arguments` in `crates/sirene/src/main.rs`.
 
 ## CLI-9 Directories

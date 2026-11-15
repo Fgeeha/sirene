@@ -29,7 +29,8 @@ struct Value {
 type Error = (TextRange, String);
 
 fn at(start: usize, len: usize) -> TextRange {
-    let n = |x: usize| TextSize::try_from(x).expect("source fits");
+    // This reader's body comes from a CST bounded by the parser's source limit.
+    let n = |x: usize| TextSize::new(x as u32);
     TextRange::at(n(start), n(len))
 }
 
@@ -798,7 +799,7 @@ fn lower(root: &SyntaxNode, yaml: bool) -> (Flowchart, Vec<Diagnostic>) {
             table(&mut chart, &v);
         }
         None if error.is_none() => {
-            let end = TextSize::try_from(body.trim_end().len()).expect("source fits");
+            let end = TextSize::new(body.trim_end().len() as u32);
             let what = if yaml { "YAML" } else { "JSON" };
             d.push(Diagnostic::new(
                 TextRange::empty(end),

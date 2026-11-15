@@ -1,3 +1,15 @@
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
+
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -9,6 +21,7 @@ use sirene_core::ascii::{Charset, Options};
 use sirene_core::diagram::{self, Lang, Lowered};
 use sirene_core::scene::png::{self, FontMetrics};
 use sirene_core::scene::{self, Approx, Theme};
+use sirene_core::{Error, Result};
 
 /// Mermaid, PlantUML, and Graphviz DOT diagram editor and viewer.
 ///
@@ -21,9 +34,9 @@ struct Cli {
     command: Option<Command>,
     /// Diagram or Markdown files to edit.
     files: Vec<PathBuf>,
-    /// Print what each step does, with timings, to stderr.
-    #[arg(short, long, global = true)]
-    verbose: bool,
+    /// Log steps to stderr; repeat for trace detail (also SIRENE_LOG).
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
     /// Read every diagram as this language, instead of by its file extension, its Markdown
     /// block's name, or its first line.
     #[arg(long, global = true, value_enum)]
@@ -50,48 +63,23 @@ fn lang(named: Option<Lang>) -> Option<Lang> {
 
 /// Parses and lowers the diagram read from `path` (stdin for `None`) in its language.
 fn lower_file(path: Option<&Path>, src: &str) -> Lowered {
+    log::trace!(
+        "lowering {} bytes with language {:?}",
+        src.len(),
+        lang(path.and_then(Lang::of_path))
+    );
     diagram::lower_as(src, lang(path.and_then(Lang::of_path)))
 }
 
-/// Writes log records to stderr as `[elapsed] target: message` (`--verbose`).
-struct Stderr {
-    start: Instant,
+// Diagnostics are a presentation boundary. A failed stderr write is remembered so the
+// process exits unsuccessfully without attempting to report that failure recursively.
+macro_rules! diagnostic {
+    ($($args:tt)*) => { crate::output::diagnostic(format_args!($($args)*)) };
 }
 
-impl log::Log for Stderr {
-    fn enabled(&self, _: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        // Only our own crates; gpui and its dependencies log a lot at debug level.
-        if !record.target().starts_with("sirene") {
-            return;
-        }
-        let ms = self.start.elapsed().as_secs_f64() * 1000.0;
-        let _ = writeln!(
-            std::io::stderr().lock(),
-            "[{ms:8.1}ms] {}: {}",
-            record.target(),
-            record.args()
-        );
-    }
-
-    fn flush(&self) {}
-}
-
-fn verbose(on: bool) {
-    if on
-        && log::set_boxed_logger(Box::new(Stderr {
-            start: Instant::now(),
-        }))
-        .is_ok()
-    {
-        log::set_max_level(log::LevelFilter::Debug);
-    }
-}
-
+mod logging;
 mod markdown;
+mod output;
 mod update;
 
 #[derive(Debug, Subcommand)]
@@ -215,8 +203,27 @@ impl ThemeArg {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    verbose(cli.verbose);
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            let code = e.exit_code() as u8;
+            return match e.print() {
+                Ok(()) => ExitCode::from(code),
+                Err(e) => {
+                    diagnostic!(
+                        "error: {}",
+                        Error::with_source("cannot write command-line help or diagnostics", e)
+                            .report()
+                    );
+                    ExitCode::FAILURE
+                }
+            };
+        }
+    };
+    if let Err(e) = logging::init(cli.verbose) {
+        diagnostic!("error: {}", e.report());
+        return ExitCode::from(2);
+    }
     let _ = FORCED_LANG.set(cli.lang.map(|l| match l {
         LangArg::Mermaid => Lang::Mermaid,
         LangArg::Dot => Lang::Dot,
@@ -237,8 +244,12 @@ fn main() -> ExitCode {
     } else {
         "failure"
     };
-    log::debug!("exit with {status}");
-    code
+    log::info!("exit with {status}");
+    if output::failed() {
+        ExitCode::FAILURE
+    } else {
+        code
+    }
 }
 
 /// The subcommand a missing FILE was probably meant to be, e.g. `asci` for `ascii`.
@@ -285,7 +296,7 @@ fn run(cli: Cli) -> ExitCode {
     if cli.command.is_none()
         && let Some((name, cmd)) = misspelled_command(&cli.files)
     {
-        eprintln!(
+        diagnostic!(
             "error: no file or command named '{name}'; did you mean 'sirene {cmd}'? \
              (to open a new file with that name, use './{name}')"
         );
@@ -295,6 +306,7 @@ fn run(cli: Cli) -> ExitCode {
         None => gui(cli.files),
         Some(Command::Update { check, yes, to }) => update::run(update::Args { check, yes, to }),
         Some(Command::Check { files }) => {
+            log::info!("checking {} input(s)", files.len());
             // Every file is checked, whatever the ones before it had.
             let failed = files.iter().filter(|f| !markdown::check(f)).count();
             if failed == 0 {
@@ -316,7 +328,9 @@ fn run(cli: Cli) -> ExitCode {
                 return markdown_blocks(md, watch, || markdown::print_ascii(md, charset));
             }
             convert(file, None, None, watch, |l| {
-                Ok(l.diagram.ascii(&Options { charset }).into_bytes())
+                l.diagram
+                    .ascii(&Options { charset })
+                    .map(String::into_bytes)
             })
         }
         Some(Command::Svg {
@@ -327,11 +341,15 @@ fn run(cli: Cli) -> ExitCode {
             output,
         }) => {
             let render = |l: &Lowered| {
-                let scene = l.diagram.scene(&Approx, &l.theme.apply(&theme.theme()));
+                let scene = l.diagram.scene(&Approx, &l.theme.apply(&theme.theme()))?;
                 Ok(scene::svg::write(&scene).into_bytes())
             };
-            let Ok(output) = stdout_dash(&file, output) else {
-                return ExitCode::from(2);
+            let output = match stdout_dash(&file, output) {
+                Ok(output) => output,
+                Err(e) => {
+                    diagnostic!("error: {}", e.report());
+                    return ExitCode::from(2);
+                }
             };
             if let Some(md) = markdown_file(&file) {
                 return markdown_blocks(md, watch, || {
@@ -353,14 +371,18 @@ fn run(cli: Cli) -> ExitCode {
             let render = |l: &Lowered| {
                 let scene = l
                     .diagram
-                    .scene(&FontMetrics, &l.theme.apply(&theme.theme()));
+                    .scene(&FontMetrics, &l.theme.apply(&theme.theme()))?;
                 // A given scale is kept (and may be too large); the quality's own shrinks to fit.
                 let scale = scale.unwrap_or_else(|| png::fit(&scene, quality.scale()));
                 png::write(&scene, png::Options { scale, quality })
             };
             let to_stdout = output.as_deref() == Some(Path::new("-"));
-            let Ok(output) = stdout_dash(&file, output) else {
-                return ExitCode::from(2);
+            let output = match stdout_dash(&file, output) {
+                Ok(output) => output,
+                Err(e) => {
+                    diagnostic!("error: {}", e.report());
+                    return ExitCode::from(2);
+                }
             };
             if let Some(md) = markdown_file(&file) {
                 return markdown_blocks(md, watch, || {
@@ -381,7 +403,7 @@ fn run(cli: Cli) -> ExitCode {
                 default
             });
             if output.is_none() && std::io::stdout().is_terminal() {
-                eprintln!("error: refusing to write a PNG to a terminal; use --output");
+                diagnostic!("error: refusing to write a PNG to a terminal; use --output");
                 return ExitCode::FAILURE;
             }
             convert(file, output, Some("png"), watch, render)
@@ -391,13 +413,14 @@ fn run(cli: Cli) -> ExitCode {
 
 /// `output` with `-` read as stdout (`None`), as `-` is stdin for FILE; an error for a directory
 /// or Markdown `file`, which write many images.
-fn stdout_dash(file: &Option<PathBuf>, output: Option<PathBuf>) -> Result<Option<PathBuf>, ()> {
+fn stdout_dash(file: &Option<PathBuf>, output: Option<PathBuf>) -> Result<Option<PathBuf>> {
     if output.as_deref() != Some(Path::new("-")) {
         return Ok(output);
     }
     if markdown_file(file).is_some() || file.as_ref().is_some_and(|f| f.is_dir()) {
-        eprintln!("error: `--output -` writes one diagram to stdout; give a directory instead");
-        return Err(());
+        return Err(Error::new(
+            "`--output -` writes one diagram to stdout; give a directory instead",
+        ));
     }
     Ok(None)
 }
@@ -418,7 +441,7 @@ fn markdown_blocks(md: &Path, watch: bool, run: impl Fn() -> bool) -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    eprintln!("watching {} (Ctrl-C to stop)", md.display());
+    diagnostic!("watching {} (Ctrl-C to stop)", md.display());
     // The first pass always runs, so a missing file is reported.
     let mut seen = None;
     loop {
@@ -427,6 +450,9 @@ fn markdown_blocks(md: &Path, watch: bool, run: impl Fn() -> bool) -> ExitCode {
             run();
             // Adding links changes the file; that is not a change to render again.
             seen = Some(stamp(md));
+        }
+        if output::failed() {
+            return ExitCode::FAILURE;
         }
         std::thread::sleep(POLL);
     }
@@ -442,7 +468,7 @@ fn gui(files: Vec<PathBuf>) -> ExitCode {
 #[cfg(not(feature = "gui"))]
 fn gui(_: Vec<PathBuf>) -> ExitCode {
     log::debug!("this binary was built without the `gui` feature");
-    eprintln!("error: built without the GUI; see sirene --help");
+    diagnostic!("error: built without the GUI; see sirene --help");
     ExitCode::FAILURE
 }
 
@@ -455,7 +481,7 @@ fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
 }
 
 /// Reads the source named on the command line: a file, or stdin for `None` or `-`.
-fn read(file: Option<PathBuf>) -> Result<(String, String), String> {
+fn read(file: Option<PathBuf>) -> Result<(String, String)> {
     match file.filter(|f| f.as_os_str() != "-") {
         Some(path) => {
             let name = path.display().to_string();
@@ -465,10 +491,10 @@ fn read(file: Option<PathBuf>) -> Result<(String, String), String> {
         None => {
             log::debug!("reading <stdin>");
             let src = read_capped(std::io::stdin().lock())
-                .map_err(|e| format!("cannot read <stdin>: {e}"))?;
+                .map_err(|e| e.context("cannot read <stdin>"))?;
             utf8(src)
                 .map(|src| ("<stdin>".to_owned(), src))
-                .map_err(|e| format!("cannot read <stdin>: {e}"))
+                .map_err(|e| e.context("cannot read <stdin>"))
         }
     }
 }
@@ -477,24 +503,39 @@ fn read(file: Option<PathBuf>) -> Result<(String, String), String> {
 const MAX_INPUT: u64 = 64 << 20;
 
 /// Reads at most `MAX_INPUT` bytes from `r`, or an error past that.
-fn read_capped(r: impl Read) -> Result<Vec<u8>, String> {
+fn read_capped(r: impl Read) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     r.take(MAX_INPUT + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Error::with_source("cannot read input bytes", e))?;
     if bytes.len() as u64 > MAX_INPUT {
-        return Err(format!("the text is over {} MiB", MAX_INPUT >> 20));
+        return Err(Error::new(format!(
+            "the text is over {} MiB",
+            MAX_INPUT >> 20
+        )));
     }
     Ok(bytes)
 }
 
 /// Reads the file at `path` as UTF-8 text, with an error naming it.
-pub(crate) fn read_text(path: &Path) -> Result<String, String> {
+pub(crate) fn read_text(path: &Path) -> Result<String> {
     std::fs::File::open(path)
-        .map_err(|e| e.to_string())
-        .and_then(read_capped)
-        .and_then(utf8)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))
+        .map_err(|e| Error::with_source(format!("cannot read {}", path.display()), e))
+        .and_then(|file| {
+            read_capped(file).map_err(|e| e.context(format!("cannot read {}", path.display())))
+        })
+        .and_then(|bytes| {
+            utf8(bytes).map_err(|e| e.context(format!("cannot read {}", path.display())))
+        })
+}
+
+/// Missing output files are expected; other metadata failures are not permission to replace them.
+fn metadata(path: &Path) -> std::io::Result<Option<std::fs::Metadata>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => Ok(Some(meta)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// Writes `bytes` to a temporary file beside `path`, then renames it over `path`, so a failed
@@ -502,12 +543,12 @@ pub(crate) fn read_text(path: &Path) -> Result<String, String> {
 /// replaced, not written through, unless `follow`, when its target is written instead. Anything
 /// other than a regular file, such as `/dev/stdout`, is written in place.
 pub(crate) fn write_file(path: &Path, bytes: &[u8], follow: bool) -> std::io::Result<()> {
-    let link = std::fs::symlink_metadata(path).ok();
+    let link = metadata(path)?;
     let path = match &link {
         Some(m) if m.file_type().is_symlink() && follow => std::fs::canonicalize(path)?,
         _ => path.to_owned(),
     };
-    let meta = std::fs::symlink_metadata(&path).ok();
+    let meta = metadata(&path)?;
     if meta
         .as_ref()
         .is_some_and(|m| !m.is_file() && !m.file_type().is_symlink())
@@ -536,13 +577,16 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8], follow: bool) -> std::io::Re
 }
 
 /// `bytes` as UTF-8, or an error naming UTF-16 (by its byte order mark) or the first bad byte.
-fn utf8(bytes: Vec<u8>) -> Result<String, String> {
+fn utf8(bytes: Vec<u8>) -> Result<String> {
     if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
         return Err("the text is UTF-16; sirene reads UTF-8".into());
     }
     String::from_utf8(bytes).map_err(|e| {
         let at = e.utf8_error().valid_up_to();
-        format!("the text is not UTF-8 (an invalid byte at offset {at})")
+        Error::with_source(
+            format!("the text is not UTF-8 (an invalid byte at offset {at})"),
+            e,
+        )
     })
 }
 
@@ -557,31 +601,41 @@ fn convert(
     output: Option<PathBuf>,
     ext: Option<&str>,
     watch: bool,
-    render: impl Fn(&Lowered) -> Result<Vec<u8>, String>,
+    render: impl Fn(&Lowered) -> Result<Vec<u8>>,
 ) -> ExitCode {
     let file = file.filter(|f| f.as_os_str() != "-");
     let dir = file.clone().filter(|f| f.is_dir());
     let jobs = || match (&dir, ext) {
-        (Some(d), Some(ext)) => distinct(scan(d, output.as_deref().unwrap_or(d), ext)),
+        (Some(d), Some(ext)) => {
+            let scanned = scan(d, output.as_deref().unwrap_or(d), ext);
+            let (jobs, mut skipped) = distinct(scanned.found);
+            skipped.extend(
+                scanned
+                    .errors
+                    .iter()
+                    .map(|e| format!("error: {}", e.report())),
+            );
+            (jobs, skipped)
+        }
         _ => (vec![(file.clone(), output.clone())], Vec::new()),
     };
     if let Some(d) = &dir {
         if ext.is_none() {
-            eprintln!(
+            diagnostic!(
                 "error: {} is a directory; ascii reads one file",
                 d.display()
             );
             return ExitCode::FAILURE;
         }
         if let Err(e) = std::fs::read_dir(d) {
-            eprintln!("error: cannot read {}: {e}", d.display());
+            diagnostic!("error: cannot read {}: {e}", d.display());
             return ExitCode::FAILURE;
         }
         if let Some(out) = &output
             && out.exists()
             && !out.is_dir()
         {
-            eprintln!(
+            diagnostic!(
                 "error: {} is not a directory; a DIR renders into one",
                 out.display()
             );
@@ -590,7 +644,7 @@ fn convert(
     } else if let (Some(src), Some(out)) = (&file, &output)
         && same_file(src, out)
     {
-        eprintln!(
+        diagnostic!(
             "error: refusing to overwrite the input {}; use --output",
             src.display()
         );
@@ -600,16 +654,18 @@ fn convert(
 
     if !watch {
         let (jobs, skipped) = jobs();
+        for line in &skipped {
+            diagnostic!("{line}");
+        }
         if let Some(d) = &dir
             && jobs.is_empty()
         {
-            eprintln!("{}", no_diagrams(d));
+            if skipped.is_empty() {
+                diagnostic!("{}", no_diagrams(d));
+            }
             return ExitCode::FAILURE;
         }
-        for line in &skipped {
-            eprintln!("{line}");
-        }
-        log::debug!("rendering {} file(s)", jobs.len());
+        log::info!("rendering {} file(s)", jobs.len());
         let mut ok = skipped.is_empty();
         for (input, output) in &jobs {
             let done = render_one(input.as_deref(), output.as_deref(), make_dirs, &render);
@@ -623,22 +679,25 @@ fn convert(
     }
 
     let Some(watched) = &file else {
-        eprintln!("error: --watch needs a FILE or directory, not stdin");
+        diagnostic!("error: --watch needs a FILE or directory, not stdin");
         return ExitCode::FAILURE;
     };
-    eprintln!("watching {} (Ctrl-C to stop)", watched.display());
+    diagnostic!("watching {} (Ctrl-C to stop)", watched.display());
     let mut seen = Seen::new();
     let mut reported = Vec::new();
     loop {
         let (jobs, skipped) = jobs();
         if skipped != reported {
             for line in &skipped {
-                eprintln!("{line}");
+                diagnostic!("{line}");
             }
             reported = skipped;
         }
         for line in watch_pass(&mut seen, &jobs, make_dirs, &render) {
-            eprintln!("{line}");
+            diagnostic!("{line}");
+        }
+        if output::failed() {
+            return ExitCode::FAILURE;
         }
         std::thread::sleep(POLL);
     }
@@ -655,12 +714,15 @@ fn watch_pass(
     seen: &mut Seen,
     jobs: &[Job],
     make_dirs: bool,
-    render: &impl Fn(&Lowered) -> Result<Vec<u8>, String>,
+    render: &impl Fn(&Lowered) -> Result<Vec<u8>>,
 ) -> Vec<String> {
     seen.retain(|p, _| jobs.iter().any(|(i, _)| i.as_ref() == Some(p)));
     let mut lines = Vec::new();
     for (input, output) in jobs {
-        let input = input.as_ref().expect("a watched input is a path");
+        let Some(input) = input.as_ref() else {
+            lines.push("error: --watch needs a FILE or directory, not stdin".to_owned());
+            continue;
+        };
         let now = stamp(input);
         if seen.get(input) == Some(&now) {
             continue;
@@ -695,33 +757,119 @@ pub(crate) fn no_diagrams(dir: &Path) -> String {
 /// `.pu`, and `.iuml`, in any case; LANGS-1), sorted, each with its output: the same path
 /// relative to `out`, with extension `ext`. Hidden entries and symlinked directories are
 /// skipped.
-fn scan(dir: &Path, out: &Path, ext: &str) -> Vec<(PathBuf, PathBuf)> {
-    let mut found = Vec::new();
+#[derive(Default)]
+struct Scan {
+    found: Vec<(PathBuf, PathBuf)>,
+    errors: Vec<Error>,
+}
+
+#[derive(Clone, Copy)]
+enum EntryKind {
+    Directory,
+    File,
+    Other,
+}
+
+fn directory_entries(dir: &Path) -> Result<Vec<Result<(PathBuf, EntryKind)>>> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| Error::with_source(format!("cannot read {}", dir.display()), e))?;
+    Ok(entries
+        .map(|entry| {
+            let entry = entry.map_err(|e| {
+                Error::with_source(format!("cannot read an entry in {}", dir.display()), e)
+            })?;
+            let path = entry.path();
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                return Ok((path, EntryKind::Other));
+            }
+            let kind = entry
+                .file_type()
+                .map_err(|e| Error::with_source(format!("cannot inspect {}", path.display()), e))?;
+            let kind = if kind.is_dir() {
+                EntryKind::Directory
+            } else if kind.is_file() {
+                EntryKind::File
+            } else if kind.is_symlink() {
+                // Follow file symlinks, but never recurse into directory symlinks.
+                match std::fs::metadata(&path) {
+                    Ok(m) if m.is_file() => EntryKind::File,
+                    Ok(_) => EntryKind::Other,
+                    Err(e) => {
+                        return Err(Error::with_source(
+                            format!("cannot inspect {}", path.display()),
+                            e,
+                        ));
+                    }
+                }
+            } else {
+                EntryKind::Other
+            };
+            Ok((path, kind))
+        })
+        .collect())
+}
+
+fn scan(dir: &Path, out: &Path, ext: &str) -> Scan {
+    scan_with(dir, out, ext, directory_entries)
+}
+
+/// Keeps traversal failures alongside successful discoveries, so a readable sibling never
+/// hides a failed directory or entry. The listing seam also tests I/O failures deterministically.
+fn scan_with(
+    dir: &Path,
+    out: &Path,
+    ext: &str,
+    list: impl Fn(&Path) -> Result<Vec<Result<(PathBuf, EntryKind)>>>,
+) -> Scan {
+    let mut scan = Scan::default();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let entries = match std::fs::read_dir(&d) {
+        log::trace!("scanning {}", d.display());
+        let entries = match list(&d) {
             Ok(entries) => entries,
             Err(e) => {
-                log::debug!("cannot list {}: {e}", d.display());
+                scan.errors.push(e);
                 continue;
             }
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if entry.file_name().to_string_lossy().starts_with('.') {
+        for entry in entries {
+            let (path, kind) = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    scan.errors.push(e);
+                    continue;
+                }
+            };
+            if path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+            {
                 continue;
             }
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                stack.push(path);
-            } else if path.is_file() && Lang::of_path(&path).is_some() {
-                let rel = path.strip_prefix(dir).expect("found under dir");
-                let target = out.join(rel).with_extension(ext);
-                found.push((path, target));
+            match kind {
+                EntryKind::Directory => stack.push(path),
+                EntryKind::File if Lang::of_path(&path).is_some() => match path.strip_prefix(dir) {
+                    Ok(rel) => {
+                        let target = out.join(rel).with_extension(ext);
+                        scan.found.push((path, target));
+                    }
+                    Err(e) => scan.errors.push(Error::with_source(
+                        "directory entry is outside the requested root",
+                        e,
+                    )),
+                },
+                _ => {}
             }
         }
     }
-    found.sort();
-    found
+    scan.found.sort();
+    log::debug!(
+        "scanned {}: {} diagram file(s), {} traversal error(s)",
+        dir.display(),
+        scan.found.len(),
+        scan.errors.len()
+    );
+    scan
 }
 
 /// An input (stdin when `None`) and its output (stdout when `None`).
@@ -774,7 +922,7 @@ fn render_one(
     file: Option<&Path>,
     output: Option<&Path>,
     make_dirs: bool,
-    render: &impl Fn(&Lowered) -> Result<Vec<u8>, String>,
+    render: &impl Fn(&Lowered) -> Result<Vec<u8>>,
 ) -> Done {
     let failed = Done {
         written: false,
@@ -783,7 +931,7 @@ fn render_one(
     let (name, src) = match read(file.map(Path::to_path_buf)) {
         Ok(read) => read,
         Err(message) => {
-            eprintln!("error: {message}");
+            diagnostic!("error: {}", message.report());
             return failed;
         }
     };
@@ -800,22 +948,23 @@ fn render_one(
         match output {
             Some(path) => {
                 if make_dirs && let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        Error::with_source(format!("cannot create {}", parent.display()), e)
+                    })?;
                 }
                 write_file(path, &bytes, false)
-                    .map_err(|e| format!("cannot write {}: {e}", path.display()))
+                    .map_err(|e| Error::with_source(format!("cannot write {}", path.display()), e))
             }
             None => {
                 let mut out = std::io::stdout().lock();
                 out.write_all(&bytes)
                     .and_then(|()| out.flush())
-                    .map_err(|e| format!("cannot write <stdout>: {e}"))
+                    .map_err(|e| Error::with_source("cannot write <stdout>", e))
             }
         }
     });
     if let Err(message) = written {
-        eprintln!("error: {message}");
+        diagnostic!("error: {}", message.report());
         return failed;
     }
     Done {
@@ -841,23 +990,126 @@ mod tests {
             &["--verbose", "ascii"],
         ] {
             let cli = parse(args);
-            assert!(cli.verbose, "{args:?}");
+            assert_eq!(cli.verbose, 1, "{args:?}");
             assert!(
                 matches!(cli.command, Some(Command::Ascii { .. })),
                 "{args:?}"
             );
         }
         let cli = parse(&["a.mmd", "b.mmd"]);
-        assert!(cli.command.is_none() && !cli.verbose);
+        assert!(cli.command.is_none() && cli.verbose == 0);
         assert_eq!(cli.files, [PathBuf::from("a.mmd"), PathBuf::from("b.mmd")]);
         let cli = parse(&["-v", "a.mmd"]);
-        assert!(cli.command.is_none() && cli.verbose);
+        assert!(cli.command.is_none() && cli.verbose > 0);
         assert_eq!(cli.files, [PathBuf::from("a.mmd")]);
         let cli = parse(&[]);
         assert!(cli.command.is_none() && cli.files.is_empty());
         // A file named like a command needs a path that is not one.
         let cli = parse(&["./ascii"]);
         assert_eq!(cli.files, [PathBuf::from("./ascii")]);
+        assert_eq!(parse(&["-vv", "ascii"]).verbose, 2);
+        assert_eq!(parse(&["ascii", "--verbose", "--verbose"]).verbose, 2);
+    }
+
+    /// ERRORH-1: original I/O and UTF-8 errors survive through file context.
+    #[test]
+    fn read_errors_retain_their_causes() {
+        use std::error::Error as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.mmd");
+        let error = read_text(&missing).unwrap_err();
+        let io = error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+        assert!(error.report().contains(&missing.display().to_string()));
+
+        let path = dir.path().join("bad.mmd");
+        std::fs::write(&path, b"a\xff").unwrap();
+        let error = read_text(&path).unwrap_err();
+        assert!(error.report().contains("offset 1"));
+        let encoding = error.source().unwrap().downcast_ref::<Error>().unwrap();
+        assert!(
+            encoding
+                .source()
+                .unwrap()
+                .is::<std::string::FromUtf8Error>()
+        );
+
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+        }
+        let error = read_capped(FailedRead).unwrap_err();
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+
+    /// ERRORH-4: a readable sibling does not erase descendant or directory-entry failures.
+    #[test]
+    fn scan_retains_directory_and_entry_errors() {
+        use std::error::Error as _;
+
+        let root = Path::new("root");
+        let scanned = scan_with(root, Path::new("out"), "svg", |dir| {
+            if dir == root {
+                Ok(vec![
+                    Ok((root.join("ok.mmd"), EntryKind::File)),
+                    Ok((root.join("locked"), EntryKind::Directory)),
+                    Err(Error::with_source(
+                        "cannot read entry",
+                        std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                    )),
+                ])
+            } else {
+                Err(Error::with_source(
+                    "cannot read root/locked",
+                    std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                ))
+            }
+        });
+        assert_eq!(
+            scanned.found,
+            [(root.join("ok.mmd"), PathBuf::from("out/ok.svg"))]
+        );
+        assert_eq!(scanned.errors.len(), 2);
+        for error in &scanned.errors {
+            assert_eq!(
+                error
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        }
+    }
+
+    #[test]
+    fn watch_rejects_stdin_jobs_without_panicking() {
+        let lines = watch_pass(
+            &mut Seen::new(),
+            &[(None, None)],
+            false,
+            &|_| Ok(Vec::new()),
+        );
+        assert_eq!(
+            lines,
+            ["error: --watch needs a FILE or directory, not stdin"]
+        );
     }
 
     #[test]
@@ -901,6 +1153,7 @@ mod tests {
         };
         let jobs = || -> Vec<_> {
             scan(dir, &out, "txt")
+                .found
                 .into_iter()
                 .map(|(i, o)| (Some(i), Some(o)))
                 .collect()
@@ -989,7 +1242,9 @@ mod tests {
             std::fs::write(dir.join(f), "").unwrap();
         }
         let found = scan(dir, Path::new("o"), "png");
+        assert!(found.errors.is_empty());
         let rel: Vec<_> = found
+            .found
             .iter()
             .map(|(i, o)| (i.strip_prefix(dir).unwrap().to_owned(), o.clone()))
             .collect();
@@ -1002,13 +1257,18 @@ mod tests {
                 (PathBuf::from("x/y/c.mmd"), PathBuf::from("o/x/y/c.png")),
             ]
         );
-        assert!(scan(&dir.join("missing"), dir, "png").is_empty());
+        assert_eq!(scan(&dir.join("missing"), dir, "png").errors.len(), 1);
     }
 
     #[test]
     fn reads_are_capped() {
         let big = std::io::repeat(b'a').take(MAX_INPUT + 1);
-        assert!(read_capped(big).unwrap_err().contains("over 64 MiB"));
+        assert!(
+            read_capped(big)
+                .unwrap_err()
+                .report()
+                .contains("over 64 MiB")
+        );
         assert_eq!(read_capped(&b"ab"[..]).unwrap(), b"ab");
     }
 

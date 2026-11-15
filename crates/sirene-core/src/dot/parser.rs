@@ -71,7 +71,7 @@ impl Iterator for Lexer<'_> {
         }
         let line_start = self.line_start;
         let r = &src[self.at..];
-        let c = r.chars().next().expect("not at the end");
+        let c = r.chars().next()?;
         let bom = self.at == 0 && c == scan::BOM;
         let (kind, len) = if bom {
             (WHITESPACE, c.len_utf8())
@@ -212,7 +212,7 @@ pub(super) fn html_len(s: &str) -> Option<usize> {
 }
 
 fn offset(n: usize) -> TextSize {
-    TextSize::try_from(n).expect("source larger than 4 GiB")
+    TextSize::new(n.min(u32::MAX as usize) as u32)
 }
 
 fn error(d: &mut Vec<Diagnostic>, start: usize, end: usize, message: impl Into<String>) {
@@ -261,6 +261,9 @@ pub(crate) fn is_dot(src: &str) -> bool {
 }
 
 pub(crate) fn parse(src: &str) -> (GreenNode, Vec<Diagnostic>) {
+    if let Some(rejected) = crate::lines::oversized(src) {
+        return rejected;
+    }
     let mut lexer = Lexer::new(src);
     let toks: Vec<Tok> = lexer.by_ref().collect();
     let mut p = Parser {
@@ -558,7 +561,10 @@ impl Parser<'_> {
 
     /// `->` in a digraph, `--` in a graph.
     fn edge_op(&mut self) {
-        let t = self.peek_tok().expect("at an edge operator");
+        let Some(t) = self.peek_tok() else {
+            self.error_here("expected an edge operator");
+            return;
+        };
         let text = &self.src[t.start..t.end];
         let (want, other) = if self.directed {
             ("->", "a `digraph`")

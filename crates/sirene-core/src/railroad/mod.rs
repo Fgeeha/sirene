@@ -245,7 +245,7 @@ impl Parse {
                 ) && parts.get(i).is_none_or(|p| p.kind() == RR_OP) =>
                 {
                     let Expr::Repeat { expr, .. } = e else {
-                        unreachable!()
+                        return None;
                     };
                     Expr::Repeat {
                         expr,

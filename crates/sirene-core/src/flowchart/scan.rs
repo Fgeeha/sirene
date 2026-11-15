@@ -134,8 +134,7 @@ pub(crate) fn string_len(s: &str) -> Option<usize> {
     if let Some(body) = s.strip_prefix("\"`") {
         body.find("`\"").map(|i| i + 4)
     } else {
-        debug_assert!(s.starts_with('"'));
-        s[1..].find('"').map(|i| i + 2)
+        s.strip_prefix('"')?.find('"').map(|i| i + 2)
     }
 }
 
@@ -253,11 +252,6 @@ pub(crate) fn text_len(s: &str, extra_stops: &[&str]) -> usize {
 /// `text_len` given `stop`, the offset of the first `is_label_stop` in `s`. Each extra stop is
 /// a character then a stop character, so it can only start just before `stop`.
 fn text_len_at(s: &str, stop: usize, extra_stops: &[&str]) -> usize {
-    debug_assert!(
-        extra_stops
-            .iter()
-            .all(|e| e.len() == 2 && is_label_stop(e.as_bytes()[1]))
-    );
     match stop.checked_sub(1).and_then(|i| s.get(i..)) {
         Some(r) if extra_stops.iter().any(|e| r.starts_with(e)) => stop - 1,
         _ => stop,

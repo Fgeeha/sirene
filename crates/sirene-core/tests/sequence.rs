@@ -64,12 +64,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
                 assert!(s.width > 0.0 && s.height > 0.0);
@@ -81,9 +86,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -371,7 +379,10 @@ fn center(s: &Scene, want: &str) -> Pt {
 #[test]
 fn drawing() {
     let src = "sequenceDiagram\n  Alice->>Bob: first\n  Bob-->>Alice: second\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let (alice, bob) = (center(&s, "Alice"), center(&s, "Bob"));
     let (first, second) = (center(&s, "first"), center(&s, "second"));
     assert!(alice.x < bob.x && (alice.y - bob.y).abs() < 0.1);
@@ -386,7 +397,8 @@ fn drawing() {
     // A long label pushes the columns apart.
     let wide = diagram::lower("sequenceDiagram\n  Alice->>Bob: a much longer label than before\n")
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     assert!(center(&wide, "Bob").x - center(&wide, "Alice").x > bob.x - alice.x);
 }
 
@@ -439,10 +451,10 @@ fn plantuml_events() {
     for charset in [Charset::Unicode, Charset::Ascii] {
         insta::assert_snapshot!(
             format!("plantuml_events_{charset:?}"),
-            d.ascii(&Options { charset })
+            d.ascii(&Options { charset }).unwrap()
         );
     }
-    let s = d.scene(&Approx, &Theme::LIGHT);
+    let s = d.scene(&Approx, &Theme::LIGHT).unwrap();
     // Bands come in order, between the first and the second message.
     let ys: Vec<f32> = [
         "hi",
@@ -484,7 +496,9 @@ fn plantuml_events() {
     // A wide separator label widens the diagram.
     let mut wide = with_plantuml_events();
     wide.events[1] = Event::Separator("a separator label much wider than the columns".to_owned());
-    let w = Diagram::Sequence(wide).scene(&Approx, &Theme::LIGHT);
+    let w = Diagram::Sequence(wide)
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     assert!(w.width > s.width);
 }
 
@@ -494,7 +508,8 @@ fn ascii_drawing() {
         .diagram
         .ascii(&Options {
             charset: Charset::Unicode,
-        });
+        })
+        .unwrap();
     assert_eq!(
         out,
         "┌───┐   ┌───┐\n\

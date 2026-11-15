@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use gpui::{App, Global};
+use sirene_core::{Error, Result};
 
 /// How many recent files are kept.
 pub const RECENT: usize = 10;
@@ -211,9 +212,9 @@ impl Settings {
     }
 
     /// Writes the settings to their file, if they have one.
-    pub fn save(&self) {
+    pub fn save(&self) -> Result<()> {
         let Some(file) = &self.file else {
-            return;
+            return Ok(());
         };
         // Written beside, then renamed over, so a crash never leaves the file half written.
         let mut temp = file.clone().into_os_string();
@@ -224,10 +225,11 @@ impl Settings {
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::write(&temp, self.to_text()))
             .and_then(|()| std::fs::rename(&temp, file));
-        match written {
-            Ok(()) => log::debug!("wrote settings to {}", file.display()),
-            Err(e) => log::debug!("cannot write settings to {}: {e}", file.display()),
-        }
+        written.map_err(|e| {
+            Error::with_source(format!("cannot write settings to {}", file.display()), e)
+        })?;
+        log::debug!("wrote settings to {}", file.display());
+        Ok(())
     }
 
     /// Puts `path` first in the recent files, once.
@@ -246,10 +248,30 @@ pub fn get(cx: &App) -> &Settings {
         .unwrap_or_else(|| DEFAULT.get_or_init(Settings::default))
 }
 
+/// The last persistence failure, retained for the app's status bar.
+#[derive(Default)]
+struct PersistenceError(Option<Error>);
+impl Global for PersistenceError {}
+
+pub fn last_error(cx: &App) -> Option<&Error> {
+    cx.try_global::<PersistenceError>()
+        .and_then(|e| e.0.as_ref())
+}
+
+/// Saves and retains any failure so it remains observable even when logging is disabled.
+pub fn save(cx: &mut App) {
+    let error = get(cx).save().err();
+    if let Some(error) = &error {
+        log::warn!("{}", error.report());
+    }
+    cx.set_global(PersistenceError(error));
+    cx.refresh_windows();
+}
+
 /// Changes the settings and saves them.
 pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     remember(cx, f);
-    cx.global::<Settings>().save();
+    save(cx);
 }
 
 /// Changes the settings without saving them yet (they are saved on the next `update`, closing
@@ -377,15 +399,15 @@ mod tests {
         let mut s = Settings::load(file.clone());
         assert_eq!(s.file.as_deref(), Some(file.as_path()));
         s.appearance = Appearance::Light;
-        s.save();
+        s.save().unwrap();
         assert_eq!(Settings::load(file.clone()).appearance, Appearance::Light);
-        // An unwritable file is skipped without failing.
+        // An unwritable file returns an error with its I/O cause.
         let blocked = Settings {
             file: Some(file.join("under-a-file")),
             ..Settings::default()
         };
-        blocked.save();
-        Settings::default().save();
+        assert!(blocked.save().is_err());
+        Settings::default().save().unwrap();
         // Nothing is left beside the file.
         let names: Vec<_> = std::fs::read_dir(file.parent().unwrap())
             .unwrap()
@@ -404,7 +426,7 @@ mod tests {
         let mut s = Settings::load(file.clone());
         assert_eq!(s.file, None);
         s.appearance = Appearance::Dark;
-        s.save();
+        s.save().unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"appearance = light\n\xff\n");
     }
 }

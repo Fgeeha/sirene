@@ -9,7 +9,7 @@ use sirene_core::scene::{self, Approx, Primitive, Pt, Segment, Theme};
 /// Rendering never panics and ends every line with a newline (ASCIIR-1).
 pub fn check_render(c: &Flowchart) -> Result<(), TestCaseError> {
     for charset in [Charset::Unicode, Charset::Ascii] {
-        let out = ascii::render(c, &Options { charset });
+        let out = ascii::render(c, &Options { charset }).unwrap();
         prop_assert!(out.is_empty() || out.ends_with('\n'));
         prop_assert!(
             !out.lines().any(|l| l.ends_with(' ')),
@@ -22,7 +22,7 @@ pub fn check_render(c: &Flowchart) -> Result<(), TestCaseError> {
 
 /// Every coordinate in a drawing is finite and inside the scene (DISPLA-1).
 pub fn check_scene(c: &Flowchart) -> Result<(), TestCaseError> {
-    let s = scene::flowchart(c, &Approx, &Theme::LIGHT);
+    let s = scene::flowchart(c, &Approx, &Theme::LIGHT).unwrap();
     let inside = |p: &Pt| {
         p.x.is_finite()
             && p.y.is_finite()

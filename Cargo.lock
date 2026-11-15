@@ -9524,6 +9524,8 @@ dependencies = [
  "predicates",
  "resvg 0.46.0",
  "self_update",
+ "sirene-core",
+ "syn 2.0.119",
  "tempfile",
  "zipsign-api",
 ]

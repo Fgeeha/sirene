@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use sirene_core::{Error, Result};
+
 use gpui::{ClipboardItem, Context, Image, ImageFormat, Task, Window};
 use sirene_core::scene::png::{self, FontMetrics, Quality};
 use sirene_core::scene::{self, Approx, Theme};
@@ -27,20 +29,15 @@ impl Format {
 
     /// `doc`'s diagram in this format, as `sirene png` and `sirene svg` write it, at `quality`
     /// for PNG.
-    pub fn render(
-        self,
-        doc: &Document,
-        theme: &Theme,
-        quality: Quality,
-    ) -> Result<Vec<u8>, String> {
+    pub fn render(self, doc: &Document, theme: &Theme, quality: Quality) -> Result<Vec<u8>> {
         match self {
             Format::Png => {
-                let scene = doc.scene(&FontMetrics, theme);
+                let scene = doc.scene(&FontMetrics, theme)?;
                 let scale = png::fit(&scene, quality.scale());
                 png::write(&scene, png::Options { scale, quality })
             }
             Format::Svg => {
-                let scene = doc.scene(&Approx, theme);
+                let scene = doc.scene(&Approx, theme)?;
                 Ok(scene::svg::write(&scene).into_bytes())
             }
         }
@@ -72,7 +69,7 @@ impl Viewer {
             .render(&self.doc, &self.theme(), Quality::Fine)
             .and_then(|bytes| {
                 crate::document::write_atomic(path, &bytes)
-                    .map_err(|e| format!("cannot write {}: {e}", path.display()))
+                    .map_err(|e| Error::with_source(format!("cannot write {}", path.display()), e))
             });
         let ok = written.is_ok();
         self.notice = Some(match written {
@@ -81,8 +78,8 @@ impl Viewer {
                 format!("exported {}", path.display())
             }
             Err(e) => {
-                log::debug!("export failed: {e}");
-                e
+                log::error!("export failed: {}", e.report());
+                e.report()
             }
         });
         cx.notify();
@@ -100,9 +97,16 @@ impl Viewer {
         let dir = crate::dialog_dir(self.doc.path.as_deref());
         let chosen = cx.prompt_for_new_path(&dir, Some(&self.export_name(format)));
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(path))) = chosen.await else {
-                log::debug!("export cancelled");
-                return None;
+            let path = match crate::dialog_result(chosen.await, "export dialog failed") {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    log::debug!("export cancelled");
+                    return None;
+                }
+                Err(error) => {
+                    let _ = this.update(cx, |v, cx| v.report_error(error, cx));
+                    return None;
+                }
             };
             this.update(cx, |v, cx| v.export_to(format, &path, cx).then_some(path))
                 .ok()
@@ -140,7 +144,11 @@ impl Viewer {
                     )));
                     "copied the drawing as an image".to_owned()
                 }
-                Err(e) => format!("cannot copy the drawing: {e}"),
+                Err(e) => {
+                    let error = e.context("cannot copy the drawing");
+                    log::error!("{}", error.report());
+                    error.report()
+                }
             },
         );
         cx.notify();

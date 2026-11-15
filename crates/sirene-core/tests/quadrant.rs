@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -236,7 +244,10 @@ fn texts(s: &Scene) -> Vec<(String, Pt)> {
 #[test]
 fn drawing() {
     let src = "quadrantChart\n  title T\n  x-axis Left --> Right\n  y-axis Bottom --> Top\n  quadrant-1 One\n  quadrant-2 Two\n  quadrant-3 Three\n  quadrant-4 Four\n  P: [0.25, 0.75]\n  Q: [1, 0]\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     let at = |want: &str| {
         t.iter()
@@ -261,7 +272,8 @@ fn drawing() {
     // A point's style: its radius and fill.
     let s = diagram::lower("quadrantChart\n  A: [0.5, 0.5] radius: 20, color: #123456\n")
         .diagram
-        .scene(&Approx, &Theme::DARK);
+        .scene(&Approx, &Theme::DARK)
+        .unwrap();
     let circle = s.elements.iter().find_map(|e| match &e.primitive {
         Primitive::Path {
             segments,
@@ -285,7 +297,8 @@ fn drawing() {
     // Without points, quadrant labels sit in the middle of their quadrants.
     let s = diagram::lower("quadrantChart\n  quadrant-1 A\n  quadrant-4 B\n")
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     assert!((t[1].1.y - t[0].1.y - 200.0).abs() < 0.01, "{t:?}");
 }

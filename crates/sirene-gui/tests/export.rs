@@ -111,3 +111,33 @@ fn copy_image(cx: &mut TestAppContext) {
         [ClipboardEntry::Image(_)]
     ));
 }
+
+/// ERRORH-3: rendering failures return errors instead of becoming successful empty exports.
+#[test]
+fn invalid_graph_exports_return_errors() {
+    let mut doc = Document::from_source(None, "flowchart\nA --> B\n".into());
+    doc.chart.nodes.clear();
+    for format in [Format::Png, Format::Svg] {
+        let error = format
+            .render(&doc, &sirene_core::scene::Theme::LIGHT, Quality::Normal)
+            .unwrap_err();
+        assert!(error.report().contains("endpoint"), "{}", error.report());
+    }
+}
+
+/// ERRORH-3: the viewer shows an invalid model's failure as text and in the status bar.
+#[gpui::test]
+fn rendering_failures_are_visible(cx: &mut TestAppContext) {
+    let mut doc = Document::from_source(None, "flowchart\nA --> B\n".into());
+    doc.chart.nodes.clear();
+    let (viewer, vcx) = open(cx, doc);
+    let status = viewer.read_with(vcx, |v, _| v.status());
+    assert!(status.contains("cannot draw the document"), "{status}");
+    assert!(status.contains("endpoint"), "{status}");
+    let texts = common::texts(&viewer, vcx);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("cannot draw the document"))
+    );
+}

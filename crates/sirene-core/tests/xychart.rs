@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -250,7 +258,10 @@ fn bars(s: &Scene) -> Vec<(f32, f32, f32, f32)> {
 #[test]
 fn drawing() {
     let src = "xychart\n  title T\n  x-axis X [a, b, c]\n  y-axis Y 0 --> 10\n  bar \"n\" [5, 10, 0]\n  line [1 \"lo\", 2, 3]\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     let (a, b, c) = (at(&t, "a"), at(&t, "b"), at(&t, "c"));
     assert!(a.x < b.x && b.x < c.x && (a.y - c.y).abs() < 0.01);
@@ -269,7 +280,8 @@ fn drawing() {
     let spread =
         diagram::lower("xychart\n  x-axis 0 --> 10\n  bar [1, 2, 3, 4, 5]\n  bar [1, 5]\n")
             .diagram
-            .scene(&Approx, &Theme::LIGHT);
+            .scene(&Approx, &Theme::LIGHT)
+            .unwrap();
     let r2 = bars(&spread);
     let mid = |k: usize| (r2[k].0 + r2[k].2) / 2.0;
     assert_eq!(r2.len(), 7, "{r2:?}");
@@ -283,7 +295,8 @@ fn drawing() {
 
     let s = diagram::lower(&src.replace("xychart", "xychart horizontal"))
         .diagram
-        .scene(&Approx, &Theme::DARK);
+        .scene(&Approx, &Theme::DARK)
+        .unwrap();
     let t = texts(&s);
     let (a, b, zero, ten) = (at(&t, "a"), at(&t, "b"), at(&t, "0"), at(&t, "10"));
     assert!(a.y < b.y && a.x < zero.x && zero.x < ten.x && zero.y > b.y);

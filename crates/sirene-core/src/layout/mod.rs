@@ -211,9 +211,20 @@ struct Incident {
 }
 
 /// Lays out `graph`.
-pub fn layout(graph: &Graph, config: &Config) -> Layout {
+pub fn layout(graph: &Graph, config: &Config) -> crate::Result<Layout> {
+    let valid = |item: Item| match item {
+        Item::Node(n) => n < graph.nodes.len(),
+        Item::Cluster(c) => c < graph.clusters.len(),
+    };
+    for (i, edge) in graph.edges.iter().enumerate() {
+        if !valid(edge.from) || !valid(edge.to) {
+            return Err(crate::Error::new(format!(
+                "edge {i} has an unknown endpoint"
+            )));
+        }
+    }
     let start = std::time::Instant::now();
-    let out = Builder::new(graph, config).run();
+    let out = Builder::new(graph, config).run()?;
     log::debug!(
         "laid out {} nodes, {} clusters, {} edges ({} routed) in {}x{} cells, {:.1?}",
         graph.nodes.len(),
@@ -224,7 +235,7 @@ pub fn layout(graph: &Graph, config: &Config) -> Layout {
         out.size.h,
         start.elapsed()
     );
-    out
+    Ok(out)
 }
 
 fn horizontal(d: Direction) -> bool {
@@ -420,7 +431,7 @@ impl<'a> Builder<'a> {
         path
     }
 
-    fn run(mut self) -> Layout {
+    fn run(mut self) -> crate::Result<Layout> {
         self.structure();
         self.rank_scopes();
         self.add_proxies();
@@ -431,15 +442,18 @@ impl<'a> Builder<'a> {
             let p = if s > 0 && self.is_lane(Item::Cluster(s - 1)) {
                 Placed::default()
             } else {
-                self.place(s, &placed)
+                self.place(s, &placed)?
             };
             placed[s] = Some(p);
         }
-        let placed: Vec<Placed> = placed
+        let placed = placed
             .into_iter()
-            .map(|p| p.expect("every scope is placed"))
-            .collect();
-        self.compose(&order, &placed)
+            .enumerate()
+            .map(|(i, p)| {
+                p.ok_or_else(|| crate::Error::new(format!("layout scope {i} was not placed")))
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        Ok(self.compose(&order, &placed))
     }
 
     /// Classifies edges, fills scopes, and resolves directions (LAYOUT-2, LAYOUT-3).
@@ -606,7 +620,7 @@ impl<'a> Builder<'a> {
         order
     }
 
-    fn place(&self, s: usize, placed: &[Option<Placed>]) -> Placed {
+    fn place(&self, s: usize, placed: &[Option<Placed>]) -> crate::Result<Placed> {
         Placer::new(self, s, placed).run()
     }
 
@@ -850,20 +864,27 @@ impl<'a, 'b> Placer<'a, 'b> {
         self.elems.len() - 1
     }
 
+    fn child(&self, c: usize) -> crate::Result<&Placed> {
+        self.placed
+            .get(c + 1)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| crate::Error::new(format!("child layout scope {c} was not placed")))
+    }
+
     /// Canonical size of an item.
-    fn item_size(&self, item: Item) -> Size {
+    fn item_size(&self, item: Item) -> crate::Result<Size> {
         let real = match item {
             Item::Node(n) => self.b.graph.nodes[n].size,
-            Item::Cluster(c) => self.placed[c + 1].as_ref().expect("child placed").size,
+            Item::Cluster(c) => self.child(c)?.size,
         };
-        swap_if(self.dir, real)
+        Ok(swap_if(self.dir, real))
     }
 
     fn label_size(&self, e: usize) -> Option<Size> {
         self.b.graph.edges[e].label.map(|l| swap_if(self.dir, l))
     }
 
-    fn build(&mut self) -> usize {
+    fn build(&mut self) -> crate::Result<usize> {
         let b = self.b;
         let scope = &b.scopes[self.s];
         // Ranks are even, so the layer above a flat edge holds no items and takes its label;
@@ -880,7 +901,7 @@ impl<'a, 'b> Placer<'a, 'b> {
         let last = base + item_layers;
         for &item in &scope.items {
             let layer = base + scope.ranks[&item] as usize;
-            let size = self.item_size(item);
+            let size = self.item_size(item)?;
             let el = self.elem(Kind::Item(item), layer, size);
             self.item_elem.insert(item, el);
         }
@@ -998,7 +1019,7 @@ impl<'a, 'b> Placer<'a, 'b> {
                 self.elem(Kind::Title, layer, title);
             }
         }
-        if self.bordered() { last + 1 } else { last }
+        Ok(if self.bordered() { last + 1 } else { last })
     }
 
     /// The lane of each element, by position in `lanes`, or `lanes.len()` for items outside
@@ -1263,7 +1284,7 @@ impl<'a, 'b> Placer<'a, 'b> {
         segments: &[(usize, usize, usize)],
         inc: &Incident,
         flat_ends: &[Vec<(usize, bool)>],
-    ) -> (Vec<PortPair>, Vec<PortPair>) {
+    ) -> crate::Result<(Vec<PortPair>, Vec<PortPair>)> {
         #[derive(Clone, Copy)]
         enum End {
             Segment(usize),
@@ -1276,15 +1297,13 @@ impl<'a, 'b> Placer<'a, 'b> {
         for (e, el) in self.elems.iter().enumerate() {
             let ports = match el.kind {
                 Kind::Item(Item::Node(_)) => None,
-                Kind::Item(Item::Cluster(c)) => {
-                    Some(&self.placed[c + 1].as_ref().expect("child placed").ports)
-                }
+                Kind::Item(Item::Cluster(c)) => Some(&self.child(c)?.ports),
                 _ => continue,
             };
             // The title of a cluster sits on its real top border, and a port there must clear
             // it (an edge ending at a cluster laid out in another direction has no proxy).
             let title = match el.kind {
-                Kind::Item(Item::Cluster(c)) => self.placed[c + 1].as_ref().and_then(|p| p.title),
+                Kind::Item(Item::Cluster(c)) => self.child(c)?.title,
                 _ => None,
             };
             let top_side = match self.dir {
@@ -1381,7 +1400,7 @@ impl<'a, 'b> Placer<'a, 'b> {
                 }
             }
         }
-        (offsets, flat_offsets)
+        Ok((offsets, flat_offsets))
     }
 
     /// Grows nodes along the cross axis until the ports on each side fit inside the corners
@@ -1403,8 +1422,8 @@ impl<'a, 'b> Placer<'a, 'b> {
         inset + ((2 * k + 1) * usable) / (2 * n) - width / 2
     }
 
-    fn run(mut self) -> Placed {
-        let count = self.build();
+    fn run(mut self) -> crate::Result<Placed> {
+        let count = self.build()?;
         let segments = self.segments();
         self.init_layers(count, &segments);
         let pairs: Vec<(usize, usize)> = segments.iter().map(|&(u, v, _)| (u, v)).collect();
@@ -1432,7 +1451,7 @@ impl<'a, 'b> Placer<'a, 'b> {
         let inc = self.incident(&segments);
         let flat_ends = self.flat_ends();
         self.fit_ports(&inc, &flat_ends);
-        let (offsets, flat_offsets) = self.ports(&segments, &inc, &flat_ends);
+        let (offsets, flat_offsets) = self.ports(&segments, &inc, &flat_ends)?;
         let spans: Vec<Span> = (0..self.elems.len())
             .map(|e| {
                 let el = self.elems[e];
@@ -1600,7 +1619,8 @@ impl<'a, 'b> Placer<'a, 'b> {
                 track_of[i] = *t;
             }
             for (&i, t) in flats.iter().zip(&tracks[segs.len()..]) {
-                flat_track[i] = t.expect("a flat edge changes position");
+                flat_track[i] =
+                    t.ok_or_else(|| crate::Error::new("a routed flat edge has no track"))?;
             }
             let mut min = if g + 1 < layers { self.sp.rank_gap } else { 0 };
             if self.bordered() && (g == 0 || g + 2 == layers) {
@@ -1791,7 +1811,7 @@ impl<'a, 'b> Placer<'a, 'b> {
                 .notes
                 .push((k, real_rect(Rect::new(x, y, size.w, size.h))));
         }
-        placed
+        Ok(placed)
     }
 
     /// Whether this is a horizontal cluster in a vertical container that an edge ends at: the

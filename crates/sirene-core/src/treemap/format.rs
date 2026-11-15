@@ -21,7 +21,18 @@ pub struct Format {
 impl Default for Format {
     /// `,`: thousands separators and up to 12 significant digits.
     fn default() -> Self {
-        Format::parse(",").expect("`,` is a valid format")
+        Self {
+            fill: ' ',
+            align: '>',
+            sign: '-',
+            symbol: None,
+            zero: false,
+            width: 0,
+            comma: true,
+            precision: Some(12),
+            trim: true,
+            kind: 'g',
+        }
     }
 }
 

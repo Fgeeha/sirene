@@ -70,10 +70,9 @@ pub fn render(b: &Block, options: &Options) -> String {
             }
         }
     }
-    for group in b.groups.iter().skip(1) {
+    for (g, group) in b.groups.iter().enumerate().skip(1) {
         let Some(s) = group.subgraph else { continue };
         let t = subgraph_title(&chart.subgraphs[s]);
-        let g = b.group_of(s).expect("a subgraph's group");
         let r = rect(placed.groups[g]);
         if !t.is_empty() {
             canvas.text(r.x + 2, r.y, &format!(" {t} "));

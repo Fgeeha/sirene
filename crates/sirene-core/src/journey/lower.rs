@@ -38,7 +38,8 @@ pub(crate) fn lower(root: &SyntaxNode) -> (Journey, Vec<Diagnostic>) {
                     if j.sections.is_empty() {
                         j.sections.push(Section::default());
                     }
-                    j.sections.last_mut().expect("one section").tasks.push(task);
+                    let last = j.sections.len() - 1;
+                    j.sections[last].tasks.push(task);
                 }
             }
             ACC_TITLE_STMT => j.acc_title = text_of(&stmt, ACC_TEXT),

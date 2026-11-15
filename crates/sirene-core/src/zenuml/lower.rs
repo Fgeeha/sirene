@@ -326,7 +326,13 @@ impl Lower {
             returned: false,
         });
         self.statements(stmt);
-        let frame = self.frames.pop().expect("pushed above");
+        let Some(frame) = self.frames.pop() else {
+            self.diagnostics.push(Diagnostic::new(
+                stmt.text_range(),
+                "call has no matching frame",
+            ));
+            return;
+        };
         let assignee = stmt
             .children()
             .find(|n| n.kind() == LABEL)

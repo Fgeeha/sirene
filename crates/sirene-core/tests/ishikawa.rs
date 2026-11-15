@@ -41,7 +41,7 @@ fn snapshots() {
             lowered.diagnostics
         );
         for charset in [Charset::Unicode, Charset::Ascii] {
-            let out = lowered.diagram.ascii(&Options { charset });
+            let out = lowered.diagram.ascii(&Options { charset }).unwrap();
             let kind = match charset {
                 Charset::Unicode => "valid",
                 Charset::Ascii => "ascii",
@@ -49,7 +49,7 @@ fn snapshots() {
             insta::assert_snapshot!(format!("{kind}__{name}"), out, &src);
         }
         for theme in [Theme::LIGHT, Theme::DARK] {
-            let s = lowered.diagram.scene(&Approx, &theme);
+            let s = lowered.diagram.scene(&Approx, &theme).unwrap();
             assert!(!s.elements.is_empty(), "{name}");
         }
     }
@@ -90,7 +90,10 @@ fn model() {
 }
 
 fn texts(src: &str) -> Vec<(String, f32, f32)> {
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     s.elements
         .iter()
         .filter_map(|e| match &e.primitive {
@@ -137,6 +140,7 @@ fn drawing() {
     assert_eq!(texts("ishikawa-beta\n"), []);
     let s = diagram::lower("ishikawa\nOnly\n")
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     assert!(s.width > 0.0 && s.height > 0.0);
 }

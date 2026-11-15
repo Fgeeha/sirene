@@ -19,7 +19,11 @@ const SMALL: f32 = 20.0;
 const BLUE: Color = Color::rgb(0x087ebf);
 const WHITE: Color = Color::rgb(0xffffff);
 
-pub fn architecture(a: &Architecture, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
+pub fn architecture(
+    a: &Architecture,
+    metrics: &impl TextMetrics,
+    theme: &Theme,
+) -> crate::Result<Scene> {
     let px = Px { metrics, theme };
     let label_size = |l: &Label| {
         px.edge_label(l)
@@ -134,7 +138,7 @@ pub fn architecture(a: &Architecture, metrics: &impl TextMetrics, theme: &Theme)
     for s in &mut chart.subgraphs {
         s.region = true;
     }
-    let (mut scene, off) = paint::draw(&chart, &layout, metrics, theme);
+    let (mut scene, off) = paint::draw(&chart, &layout, metrics, theme)?;
 
     for (i, item) in a.items.iter().enumerate() {
         let Item::Service { icon } = item else {
@@ -184,7 +188,7 @@ pub fn architecture(a: &Architecture, metrics: &impl TextMetrics, theme: &Theme)
             });
         }
     }
-    scene
+    Ok(scene)
 }
 
 fn line(width: f32) -> Option<Stroke> {

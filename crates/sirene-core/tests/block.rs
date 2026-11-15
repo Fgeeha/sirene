@@ -63,12 +63,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
             }
         }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -226,7 +234,7 @@ fn syntax_errors() {
 fn drawing() {
     let src = "block-beta\ncolumns 2\na b\nblock:g\n  c\nend\nd<[\"go\"]>(right)\na --> b\n";
     let lowered = diagram::lower(src);
-    let s = lowered.diagram.scene(&Approx, &Theme::LIGHT);
+    let s = lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
     let center = |want: &str| {
         s.elements
             .iter()

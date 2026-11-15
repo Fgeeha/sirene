@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -197,7 +205,10 @@ fn texts(s: &Scene) -> Vec<(String, Pt)> {
 #[test]
 fn drawing() {
     let src = "kanban\n  todo[To do]\n    a[One]@{ ticket: T-1, assigned: ann, priority: High }\n    b[Two]\n  done[Done]\n    c[Three]\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     let at = |want: &str| {
         t.iter()
@@ -227,7 +238,10 @@ fn drawing() {
     let src = format!(
         "kanban\n  todo[To do]\n    a[One]@{{ ticket: PROJ-{long}, assigned: \"A Very Long {long}\" }}\n"
     );
-    let s = diagram::lower(&src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(&src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     let ticket = t.iter().find(|(s, _)| s.starts_with("PROJ-")).unwrap();
     let who = t.iter().find(|(s, _)| s.starts_with("A Very")).unwrap();

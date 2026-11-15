@@ -70,7 +70,7 @@ fn snapshots() {
             for charset in [Charset::Unicode, Charset::Ascii] {
                 let mut out = diagnostics(&src, &lowered);
                 out.push('\n');
-                out.push_str(&lowered.diagram.ascii(&Options { charset }));
+                out.push_str(&lowered.diagram.ascii(&Options { charset }).unwrap());
                 let kind = match charset {
                     Charset::Unicode => dir,
                     Charset::Ascii => "ascii",
@@ -78,7 +78,7 @@ fn snapshots() {
                 insta::assert_snapshot!(format!("{kind}__{name}"), out, &src);
             }
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
             }
         }
@@ -160,7 +160,7 @@ fn connectors() {
 fn flow_style() {
     let bodies = |src: &str, owner: fn(&Owner) -> bool| -> Vec<(bool, f32)> {
         let lowered = diagram::lower(src);
-        let s = lowered.diagram.scene(&Approx, &Theme::LIGHT);
+        let s = lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
         s.elements
             .iter()
             .filter(|e| owner(&e.owner))

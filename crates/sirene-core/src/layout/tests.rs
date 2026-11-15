@@ -47,7 +47,7 @@ fn two_nodes_top_bottom() {
         edges: vec![edge(0, 1)],
         ..Graph::default()
     };
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     assert_eq!(l.nodes, [Rect::new(0, 0, 5, 3), Rect::new(0, 5, 5, 3)]);
     assert_eq!(l.size, Size::new(5, 8));
     let route = l.edges[0].as_ref().unwrap();
@@ -63,18 +63,18 @@ fn directions() {
         ..Graph::default()
     };
     g.direction = Direction::BottomTop;
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     assert_eq!(l.nodes, [Rect::new(0, 5, 5, 3), Rect::new(0, 0, 5, 3)]);
     assert_eq!(l.edges[0].as_ref().unwrap().points, pts(&[(2, 5), (2, 2)]));
 
     g.direction = Direction::LeftRight;
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     assert_eq!(l.nodes, [Rect::new(0, 0, 5, 3), Rect::new(7, 0, 5, 3)]);
     assert_eq!(l.size, Size::new(12, 3));
     assert_eq!(l.edges[0].as_ref().unwrap().points, pts(&[(4, 1), (7, 1)]));
 
     g.direction = Direction::RightLeft;
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     assert_eq!(l.nodes, [Rect::new(7, 0, 5, 3), Rect::new(0, 0, 5, 3)]);
     assert_eq!(l.edges[0].as_ref().unwrap().points, pts(&[(7, 1), (4, 1)]));
 }
@@ -126,9 +126,9 @@ fn cluster_direction_survives_an_edge_to_the_cluster() {
         ..Graph::default()
     };
     let stacked = |l: &Layout, a: usize, b: usize| l.nodes[a].x == l.nodes[b].x;
-    let l = layout(&g(false), &CONFIG);
+    let l = layout(&g(false), &CONFIG).unwrap();
     assert!(stacked(&l, 0, 1) && stacked(&l, 2, 3), "{:?}", l.nodes);
-    let l = layout(&g(true), &CONFIG);
+    let l = layout(&g(true), &CONFIG).unwrap();
     assert!(stacked(&l, 0, 1), "{:?}", l.nodes);
     assert!(!stacked(&l, 2, 3), "{:?}", l.nodes);
 }
@@ -173,7 +173,7 @@ fn nested_cluster_directions_are_kept() {
         ],
         ..Graph::default()
     };
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     let (b1, b2) = (l.clusters[1], l.clusters[2]);
     // TOP is top to bottom: B1 above B2.
     assert!(b1.bottom() <= b2.y, "{b1:?} {b2:?}");
@@ -204,7 +204,7 @@ fn edge_to_titled_cluster_clears_the_title() {
             }],
             ..Graph::default()
         };
-        let l = layout(&g, &CONFIG);
+        let l = layout(&g, &CONFIG).unwrap();
         let title = l.titles[0].unwrap();
         let route = l.edges[0].as_ref().unwrap();
         assert!(
@@ -236,7 +236,7 @@ fn edge_to_own_descendant_is_unroutable() {
         ],
         ..Graph::default()
     };
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     assert!(l.edges[0].is_some());
     assert!(l.edges[1].is_none() && l.edges[2].is_none());
 }
@@ -258,7 +258,7 @@ fn bad_cluster_parents_are_top_level() {
         clusters: vec![cluster(1), cluster(0), cluster(2), cluster(9)],
         ..Graph::default()
     };
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     let inside = |a: Rect, b: Rect| a.x > b.x && a.right() < b.right() && a.y > b.y;
     assert!(inside(l.clusters[1], l.clusters[0]));
     assert!(inside(l.nodes[0], l.clusters[1]));
@@ -289,7 +289,7 @@ fn flat_edges() {
         same_rank: vec![vec![0, 1, 2]],
         ..Graph::default()
     };
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     assert!(l.nodes.iter().all(|r| r.y == 0), "{:?}", l.nodes);
     let (a, b) = (l.nodes[0], l.nodes[1]);
     let straight = &l.edges[0].as_ref().unwrap().points;
@@ -304,12 +304,12 @@ fn flat_edges() {
     for e in &mut g.edges {
         e.constraint = false;
     }
-    let l = layout(&g, &CONFIG);
+    let l = layout(&g, &CONFIG).unwrap();
     assert!(l.nodes.iter().all(|r| r.y == 0), "{:?}", l.nodes);
 }
 
 #[test]
 fn empty_graph() {
-    let l = layout(&Graph::default(), &CONFIG);
+    let l = layout(&Graph::default(), &CONFIG).unwrap();
     assert_eq!(l, Layout::default());
 }

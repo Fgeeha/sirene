@@ -105,7 +105,7 @@ const ITALIC: TextStyle = TextStyle {
     italic: true,
 };
 
-pub fn c4(c: &C4, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
+pub fn c4(c: &C4, metrics: &impl TextMetrics, theme: &Theme) -> crate::Result<Scene> {
     let px = Px { metrics, theme };
     let t = Text { metrics, theme };
     let inner = WIDTH - 2.0 * PAD;
@@ -286,7 +286,7 @@ pub fn c4(c: &C4, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
             s.styles.push(style("stroke-dasharray", "7 7"));
         }
     }
-    let (mut scene, off) = paint::draw(&chart, &layout, metrics, theme);
+    let (mut scene, off) = paint::draw(&chart, &layout, metrics, theme)?;
 
     let mut push = |owner: Owner, primitive: Primitive| {
         scene.elements.push(Element { owner, primitive });
@@ -391,7 +391,7 @@ pub fn c4(c: &C4, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
     scene
         .elements
         .sort_by_key(|e| matches!(e.owner, Owner::Edge(_)));
-    scene
+    Ok(scene)
 }
 
 fn style(property: &str, value: &str) -> Style {

@@ -3,12 +3,12 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use sirene_core::Severity;
 use sirene_core::diagram::{self, Diagram, Kind, Lang};
 use sirene_core::flowchart::Flowchart;
 use sirene_core::markdown::{Block, append_block, is_markdown, mermaid_blocks};
 use sirene_core::scene::{Scene, TextMetrics, Theme};
 use sirene_core::theme::ThemeConfig;
+use sirene_core::{Error, Result, Severity};
 
 /// The text of a new document (WYSIWY-7).
 pub const STARTER: &str = "flowchart TD\n    A --> B\n";
@@ -82,9 +82,9 @@ pub struct Document {
     /// `bgcolor`.
     pub theme: ThemeConfig,
     /// Why the file could not be read, when it could not.
-    pub read_error: Option<String>,
+    pub read_error: Option<Error>,
     /// Why the last save failed, until the next save or reload.
-    pub write_error: Option<String>,
+    pub write_error: Option<Error>,
     /// The file changed on disk while the document had unsaved edits.
     pub disk_changed: bool,
 }
@@ -187,7 +187,7 @@ impl Document {
     }
 
     /// The drawing of whichever diagram the document holds.
-    pub fn scene(&self, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
+    pub fn scene(&self, metrics: &impl TextMetrics, theme: &Theme) -> Result<Scene> {
         // The diagram's own theme settings win over the app's (MTHEME-1).
         let theme = &self.theme.apply(theme);
         match &self.other {
@@ -234,7 +234,7 @@ impl Document {
     pub fn open(path: &Path) -> Self {
         let doc = Self::read(path);
         match &doc.read_error {
-            Some(e) => log::debug!("{e}"),
+            Some(e) => log::warn!("{}", e.report()),
             None => log::debug!(
                 "opened {}: {} bytes, {} problems",
                 path.display(),
@@ -255,7 +255,7 @@ impl Document {
 
     /// The file's text, or an empty text and the read error. A file over `MAX_FILE` bytes is not
     /// read.
-    fn read_text(path: &Path) -> (String, Option<String>) {
+    fn read_text(path: &Path) -> (String, Option<Error>) {
         use std::io::Read;
 
         let read = std::fs::File::open(path).and_then(|file| {
@@ -274,7 +274,10 @@ impl Document {
             Ok(text) => (text, None),
             Err(e) => (
                 String::new(),
-                Some(format!("cannot read {}: {e}", path.display())),
+                Some(Error::with_source(
+                    format!("cannot read {}", path.display()),
+                    e,
+                )),
             ),
         }
     }
@@ -311,7 +314,9 @@ impl Document {
         };
         // Compare the text before parsing it: this runs every 500ms.
         let (text, error) = Self::read_text(path);
-        if text == self.saved && error == self.read_error {
+        if text == self.saved
+            && error.as_ref().map(Error::report) == self.read_error.as_ref().map(Error::report)
+        {
             return Disk::Unchanged;
         }
         let next = Self {
@@ -324,8 +329,8 @@ impl Document {
                 path.display(),
                 next.source.len(),
                 next.read_error
-                    .as_deref()
-                    .map_or_else(String::new, |e| format!(": {e}"))
+                    .as_ref()
+                    .map_or_else(String::new, |e| format!(": {}", e.report()))
             );
             self.replace(next);
             return Disk::Reloaded;
@@ -362,15 +367,15 @@ impl Document {
 
     /// Writes the text to the file through a temporary file in the same directory
     /// (WYSIWY-4). On failure the document stays edited and records the error.
-    pub fn save(&mut self) -> Result<(), String> {
+    pub fn save(&mut self) -> Result<()> {
         let result = match &self.path {
             Some(path) => write_atomic(path, self.text().as_bytes())
-                .map_err(|e| format!("cannot write {}: {e}", path.display())),
-            None => Err("no file to save to".to_owned()),
+                .map_err(|e| Error::with_source(format!("cannot write {}", path.display()), e)),
+            None => Err(Error::new("no file to save to")),
         };
         match &result {
             Ok(()) => log::debug!("saved {} bytes to {}", self.text().len(), self.name()),
-            Err(e) => log::debug!("save failed: {e}"),
+            Err(e) => log::error!("save failed: {}", e.report()),
         }
         match &result {
             Ok(()) => {
@@ -387,7 +392,7 @@ impl Document {
     /// Saves to `path`, which the document then shows. Saving a diagram as Markdown writes it in
     /// a block named for its language; saving a Markdown file's block as a diagram writes the
     /// block alone. On failure the document keeps its file and records the error.
-    pub fn save_as(&mut self, path: PathBuf) -> Result<(), String> {
+    pub fn save_as(&mut self, path: PathBuf) -> Result<()> {
         let markdown = match (&self.markdown, is_markdown(&path)) {
             (Some(_), false) => None,
             (None, true) => {
@@ -449,7 +454,7 @@ impl Document {
     /// diagnostic (errors first) and a count, or else the title.
     pub fn status(&self) -> String {
         if let Some(e) = &self.write_error {
-            return e.clone();
+            return e.report();
         }
         if self.disk_changed {
             return format!(
@@ -458,7 +463,7 @@ impl Document {
             );
         }
         if let Some(e) = &self.read_error {
-            return e.clone();
+            return e.report();
         }
         if self
             .markdown
@@ -613,9 +618,77 @@ fn write_in_place(path: &Path, text: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
+/// A visible failure placeholder used only at the viewer's reporting boundary.
+pub(crate) fn error_scene(error: &Error, theme: &Theme) -> Scene {
+    use sirene_core::scene::{Element, Owner, Primitive, Pt, TextStyle};
+    let text = error.report();
+    let width = (text.chars().count() as f32 * theme.font_size).max(240.0);
+    Scene {
+        width,
+        height: theme.line_height * 3.0,
+        background: theme.background,
+        elements: vec![Element {
+            owner: Owner::Diagram,
+            primitive: Primitive::Text {
+                text,
+                center: Pt::new(width / 2.0, theme.line_height * 1.5),
+                size: theme.font_size,
+                color: theme.text,
+                style: TextStyle::default(),
+            },
+        }],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ERRORH-2: presentation does not discard typed filesystem or UTF-8 causes.
+    #[test]
+    fn read_and_save_errors_retain_sources() {
+        use std::error::Error as _;
+        let dir = tempfile::tempdir().unwrap();
+        let mut doc = Document::open(&dir.path().join("missing.mmd"));
+        let error = doc.read_error.as_ref().unwrap();
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(doc.status().contains("missing.mmd"));
+        let invalid = dir.path().join("invalid.mmd");
+        std::fs::write(&invalid, [0xff]).unwrap();
+        let doc_utf8 = Document::open(&invalid);
+        let error = doc_utf8.read_error.as_ref().unwrap();
+        let io = error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert!(
+            io.get_ref()
+                .unwrap()
+                .downcast_ref::<std::string::FromUtf8Error>()
+                .is_some()
+        );
+        doc.path = Some(dir.path().join("missing-dir/output.mmd"));
+        let error = doc.save().unwrap_err();
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(doc.status(), error.report());
+    }
 
     #[test]
     fn untitled_document() {
@@ -628,7 +701,7 @@ mod tests {
         let mut d = d;
         assert_eq!(d.poll(), Disk::Unchanged);
         assert!(!d.reload());
-        assert_eq!(d.save(), Err("no file to save to".into()));
+        assert_eq!(d.save().unwrap_err().report(), "no file to save to");
         assert_eq!(d.status(), "no file to save to");
     }
 
@@ -650,13 +723,22 @@ mod tests {
         use sirene_core::scene::{Approx, Color};
         let mut d = Document::from_source(None, "digraph { bgcolor=red; a }".into());
         let light = Theme::LIGHT;
-        assert_eq!(d.scene(&Approx, &light).background, Color::rgb(0xff0000));
+        assert_eq!(
+            d.scene(&Approx, &light).unwrap().background,
+            Color::rgb(0xff0000)
+        );
         d.set_source("digraph { a }".into());
-        assert_eq!(d.scene(&Approx, &light).background, light.background);
+        assert_eq!(
+            d.scene(&Approx, &light).unwrap().background,
+            light.background
+        );
         d.set_source(
             "%%{init: {'themeVariables': {'background': '#00ff00'}}}%%\nflowchart\nA\n".into(),
         );
-        assert_eq!(d.scene(&Approx, &light).background, Color::rgb(0x00ff00));
+        assert_eq!(
+            d.scene(&Approx, &light).unwrap().background,
+            Color::rgb(0x00ff00)
+        );
     }
 
     #[test]
@@ -737,7 +819,7 @@ mod tests {
         d.set_source("flowchart LR\nA --> B\n".into());
         std::fs::write(&path, "flowchart LR\nX\n").unwrap();
         assert_eq!(d.poll(), Disk::Conflict);
-        assert_eq!(d.save(), Ok(()));
+        d.save().unwrap();
         assert!(!d.is_edited());
         assert!(!d.disk_changed);
         assert_eq!(
@@ -750,7 +832,7 @@ mod tests {
 
         let mut d = Document::untitled();
         let other = dir.path().join("b.mmd");
-        assert_eq!(d.save_as(other.clone()), Ok(()));
+        d.save_as(other.clone()).unwrap();
         assert_eq!(d.name(), "b.mmd");
         assert_eq!(std::fs::read_to_string(&other).unwrap(), STARTER);
     }
@@ -775,7 +857,7 @@ mod tests {
 
         let mut d = Document::open(&link);
         d.set_source("flowchart LR\nA --> B\n".into());
-        assert_eq!(d.save(), Ok(()));
+        d.save().unwrap();
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -811,7 +893,7 @@ mod tests {
         d.set_source("flowchart LR\nA --> B\n".into());
         let err = d.save().unwrap_err();
         assert_eq!(
-            err,
+            err.report(),
             format!("cannot write {}: the file is read-only", path.display())
         );
         assert!(d.is_edited());
@@ -857,9 +939,9 @@ mod tests {
         d.set_source("flowchart LR\nA --> B\n".into());
         let path = dir.path().join("missing").join("a.mmd");
         let err = d.save_as(path).unwrap_err();
-        assert!(err.starts_with("cannot write "), "{err}");
+        assert!(err.report().starts_with("cannot write "), "{err}");
         assert!(d.is_edited());
-        assert_eq!(d.status(), err);
+        assert_eq!(d.status(), err.report());
         // The document keeps its file (none), so a poll finds nothing.
         assert_eq!(d.title(), "Untitled (edited)");
         assert_eq!(d.poll(), Disk::Unchanged);

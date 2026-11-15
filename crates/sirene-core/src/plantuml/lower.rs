@@ -897,13 +897,14 @@ impl Lower {
         for (new, &o) in old.iter().enumerate() {
             new_of[o] = new;
         }
-        let mut parts: Vec<Option<Participant>> = std::mem::take(&mut self.seq.participants)
+        let mut parts: Vec<(usize, Participant)> = std::mem::take(&mut self.seq.participants)
             .into_iter()
-            .map(Some)
+            .enumerate()
             .collect();
-        self.seq.participants = old
-            .iter()
-            .map(|&o| parts[o].take().expect("each once"))
+        parts.sort_by_key(|(old, _)| new_of[*old]);
+        self.seq.participants = parts
+            .into_iter()
+            .map(|(_, participant)| participant)
             .collect();
         for i in self.index.values_mut() {
             *i = new_of[*i];

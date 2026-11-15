@@ -13,7 +13,9 @@ fn run(args: &[&str]) -> Result<String, String> {
     let args = std::iter::once("xtask")
         .chain(args.iter().copied())
         .map(OsString::from);
-    xtask::run(args, &mut out).map(|()| String::from_utf8(out).unwrap())
+    xtask::run(args, &mut out)
+        .map(|()| String::from_utf8(out).unwrap())
+        .map_err(|e| e.report())
 }
 
 fn path(p: &Path) -> &str {
@@ -270,4 +272,51 @@ fn binary_exit_codes() {
         .assert()
         .failure()
         .stderr("not a SHA-256 checksum: \"x\"\n");
+}
+
+/// ERRORH-2: release tooling retains both dependency and underlying OS errors.
+#[test]
+fn signing_key_errors_retain_io_causes() {
+    use std::error::Error as _;
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.key");
+    let public = dir.path().join("release.pub");
+    let error = xtask::signing_key(&missing, &public).err().unwrap();
+    let mut cause = error.source();
+    let mut found = false;
+    while let Some(error) = cause {
+        if let Some(io) = error.downcast_ref::<std::io::Error>() {
+            assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+            found = true;
+        }
+        cause = error.source();
+    }
+    assert!(found, "{}", error.report());
+    assert!(error.report().contains("missing.key"));
+}
+
+/// ERRORH-4: failed output writes return inspectable errors without panicking.
+#[test]
+fn command_output_errors_retain_io_causes() {
+    use std::error::Error as _;
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "closed reader",
+            ))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let args = ["xtask", "--help"].map(OsString::from);
+    let error = xtask::run(args, &mut Broken).unwrap_err();
+    let io = error
+        .source()
+        .unwrap()
+        .downcast_ref::<std::io::Error>()
+        .unwrap();
+    assert_eq!(io.kind(), std::io::ErrorKind::BrokenPipe);
 }

@@ -686,7 +686,7 @@ fn arrow(name: &str) -> Option<Option<Arrow>> {
         "box" | "tee" => Some(Arrow::One),
         "crow" if open => Some(Arrow::ZeroMany),
         "crow" => Some(Arrow::OneMany),
-        _ => unreachable!("listed above"),
+        _ => return None,
     })
 }
 
