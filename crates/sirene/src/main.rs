@@ -840,6 +840,11 @@ fn directory_entries(dir: &Path) -> Result<Vec<Result<(PathBuf, EntryKind)>>> {
             } else if kind.is_file() {
                 EntryKind::File
             } else if kind.is_symlink() {
+                // Only diagram-named links can be inputs. Avoid inspecting unrelated links,
+                // whose targets may be missing or inaccessible.
+                if Lang::of_path(&path).is_none() {
+                    return Ok((path, EntryKind::Other));
+                }
                 // Follow file symlinks, but never recurse into directory symlinks.
                 match std::fs::metadata(&path) {
                     Ok(m) if m.is_file() => EntryKind::File,

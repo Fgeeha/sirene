@@ -411,8 +411,9 @@ pub fn init(cx: &mut App) {
         cx.spawn(async move |cx| {
             if quit.await {
                 cx.update(|cx| {
-                    settings::save(cx);
-                    cx.quit()
+                    if settings::save_on_exit(cx) {
+                        cx.quit()
+                    }
                 });
             }
         })

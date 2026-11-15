@@ -257,6 +257,10 @@ pub fn get(cx: &App) -> &Settings {
 struct PersistenceError(Option<Error>);
 impl Global for PersistenceError {}
 
+#[derive(Default)]
+struct ExitSaveFailed(bool);
+impl Global for ExitSaveFailed {}
+
 pub fn last_error(cx: &App) -> Option<&Error> {
     cx.try_global::<PersistenceError>()
         .and_then(|e| e.0.as_ref())
@@ -264,12 +268,45 @@ pub fn last_error(cx: &App) -> Option<&Error> {
 
 /// Saves and retains any failure so it remains observable even when logging is disabled.
 pub fn save(cx: &mut App) {
-    let error = get(cx).save().err();
+    cx.set_global(ExitSaveFailed(false));
+    let error = persist(cx);
     if let Some(error) = &error {
         log::warn!("{}", error.report());
     }
-    cx.set_global(PersistenceError(error));
+}
+
+fn persist(cx: &mut App) -> Option<Error> {
+    let error = get(cx).save().err();
+    cx.set_global(PersistenceError(error.clone()));
     cx.refresh_windows();
+    error
+}
+
+/// Keep the window open on the first failure; a second exit accepts losing settings.
+pub(crate) fn save_on_exit(cx: &mut App) -> bool {
+    let error = persist(cx);
+    report_exit_error(error.as_ref(), &mut std::io::stderr().lock());
+    let Some(error) = error else {
+        cx.set_global(ExitSaveFailed(false));
+        return true;
+    };
+    let retry = cx
+        .try_global::<ExitSaveFailed>()
+        .is_some_and(|state| state.0);
+    cx.set_global(ExitSaveFailed(true));
+    if !retry {
+        cx.set_global(PersistenceError(Some(error.context(
+            "settings were not saved; close again to exit without saving settings",
+        ))));
+        cx.refresh_windows();
+    }
+    retry
+}
+
+fn report_exit_error(error: Option<&Error>, out: &mut impl Write) {
+    if let Some(error) = error {
+        let _ = writeln!(out, "error: {}", error.report());
+    }
 }
 
 /// Changes the settings and saves them.
@@ -507,5 +544,24 @@ mod tests {
         };
         assert!(settings.save().is_err());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn exit_reports_the_full_settings_error_without_logging() {
+        use std::error::Error as _;
+        let dir = tempfile::tempdir().unwrap();
+        let obstruction = dir.path().join("not-a-directory");
+        std::fs::write(&obstruction, b"keep").unwrap();
+        let settings = Settings {
+            file: Some(obstruction.join("settings")),
+            ..Settings::default()
+        };
+        let error = settings.save().unwrap_err();
+        let mut output = Vec::new();
+        super::report_exit_error(Some(&error), &mut output);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("cannot write settings"));
+        assert!(output.contains(&obstruction.display().to_string()));
+        assert!(output.contains(&error.source().unwrap().to_string()));
     }
 }

@@ -697,8 +697,9 @@ impl Viewer {
             if confirmed.await {
                 log::debug!("closing the window");
                 let _ = cx.update(|window, cx| {
-                    settings::save(cx);
-                    window.remove_window()
+                    if settings::save_on_exit(cx) {
+                        window.remove_window()
+                    }
                 });
             }
         })
@@ -712,8 +713,7 @@ impl Viewer {
     /// The platform asks before closing the window, e.g. from its title bar.
     pub fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.doc.is_edited() {
-            settings::save(cx);
-            return true;
+            return settings::save_on_exit(cx);
         }
         self.close_when_confirmed(window, cx);
         false
@@ -813,6 +813,37 @@ fn theme_mode(dark: bool) -> ThemeMode {
         ThemeMode::Dark
     } else {
         ThemeMode::Light
+    }
+}
+
+/// Keep the current document status visible alongside retained app-wide failures.
+fn status_with_errors(
+    mut status: String,
+    settings_error: Option<&sirene_core::Error>,
+    app_error: Option<&sirene_core::Error>,
+) -> String {
+    for error in [settings_error, app_error].into_iter().flatten() {
+        status.push_str(" | ");
+        status.push_str(&error.report());
+    }
+    status
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::status_with_errors;
+    use sirene_core::Error;
+
+    #[test]
+    fn current_status_remains_visible_with_retained_errors() {
+        let settings = Error::new("settings failed");
+        let app = Error::new("open failed");
+        for current in ["save failed", "exported drawing"] {
+            let status = status_with_errors(current.into(), Some(&settings), Some(&app));
+            assert!(status.contains(current));
+            assert!(status.contains("settings failed"));
+            assert!(status.contains("open failed"));
+        }
     }
 }
 
@@ -1021,11 +1052,11 @@ impl Render for Viewer {
                     .border_t_1()
                     .border_color(rule)
                     .items_center()
-                    .child(
-                        settings::last_error(cx)
-                            .or_else(|| crate::last_app_error(cx))
-                            .map_or_else(|| self.status(), |e| e.report()),
-                    )
+                    .child(status_with_errors(
+                        self.status(),
+                        settings::last_error(cx),
+                        crate::last_app_error(cx),
+                    ))
                     .child(
                         div()
                             .flex()

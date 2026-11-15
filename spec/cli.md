@@ -94,7 +94,8 @@ in `crates/sirene/tests/cli.rs` and `arguments` in `crates/sirene/src/main.rs`.
 
 `sirene svg DIR` and `sirene png DIR` render every diagram file under DIR (by `Lang::of_path`:
 `.mmd`, `.mermaid`, `.dot`, `.gv`, `.puml`, `.plantuml`, `.pu`, and `.iuml`, in any case), recursing
-into subdirectories but skipping hidden entries and symlinked directories, in path order. Each is
+into subdirectories but skipping hidden entries and symlinked directories, in path order. Scanning
+does not resolve unrelated symlinks; an unresolvable diagram-file symlink is reported. Each is
 written as `.svg` or `.png` beside it, or with `-o OUTDIR` to the same relative path under OUTDIR
 (directories are created as needed). Diagnostics follow CLI-3 for each file; one file's errors
 fail the run without stopping the others. Output paths compare without regard to case on

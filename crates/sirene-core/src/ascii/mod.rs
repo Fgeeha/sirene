@@ -108,6 +108,9 @@ pub const CONFIG: Config = Config {
 pub fn render(chart: &Flowchart, options: &Options) -> crate::Result<String> {
     // Collapsed subgraphs (FLOWMO-15) are drawn folded into nodes.
     let folded = chart.collapsed();
+    if folded.is_some() {
+        chart.validate_edge_endpoints()?;
+    }
     let chart = folded.as_ref().map_or(chart, |c| &c.chart);
     // Stereotypes (`«interface»`) are written `<<interface>>` in plain ASCII, before layout so
     // boxes fit the wider text.

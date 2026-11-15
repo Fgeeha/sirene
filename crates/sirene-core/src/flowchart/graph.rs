@@ -23,6 +23,25 @@ pub trait Measure {
 }
 
 impl Flowchart {
+    /// Check original endpoints before a collapsed subgraph can hide them.
+    pub(crate) fn validate_edge_endpoints(&self) -> crate::Result<()> {
+        let ids: std::collections::HashSet<&str> = self
+            .nodes
+            .iter()
+            .map(|n| n.id.as_str())
+            .chain(self.subgraphs.iter().map(|s| s.id.as_str()))
+            .collect();
+        for edge in &self.edges {
+            for endpoint in [&edge.from, &edge.to] {
+                if !ids.contains(endpoint.as_str()) {
+                    return Err(crate::Error::new(format!(
+                        "unknown edge endpoint `{endpoint}`"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
     /// Each note whose target is a node or a subgraph, with that item, in the order of the
     /// layout graph's notes.
     pub fn placed_notes(&self) -> impl Iterator<Item = (Item, &Note)> {

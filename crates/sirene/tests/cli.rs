@@ -111,6 +111,21 @@ fn directory_entry_failures_fail_checks_and_batch_conversion() {
     assert!(good.with_extension("png").is_file());
 }
 
+/// ERRORH-4: unrelated dangling links do not prevent checking or rendering diagrams.
+#[cfg(unix)]
+#[test]
+fn directory_scan_ignores_unrelated_dangling_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ok.mmd"), "flowchart\nA\n").unwrap();
+    symlink("missing", dir.path().join("README")).unwrap();
+    for command in ["check", "svg"] {
+        sirene().arg(command).arg(dir.path()).assert().success();
+    }
+    assert!(dir.path().join("ok.svg").is_file());
+}
+
 /// ERRORH-3: OS write errors produce failure rather than a panic exit.
 #[cfg(all(
     target_os = "linux",
