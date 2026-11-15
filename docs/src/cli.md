@@ -93,6 +93,8 @@ One file's errors fail the run without stopping the others. When two diagrams wo
 same output (`a.mmd` beside `a.mermaid`), the first in path order wins and the other is reported.
 On macOS and Windows, output paths compare without regard to case, so `A.mmd` and `a.mmd`
 also collide.
+Output directory symlinks are resolved when checking collisions. An output that would replace
+any input, including the target of an input symlink, is skipped and reported.
 
 ## Markdown files
 

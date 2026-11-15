@@ -749,6 +749,77 @@ fn directory_output_collisions() {
 
 #[cfg(unix)]
 #[test]
+fn batch_protects_symlinked_sources_and_resolves_output_directories() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("input");
+    std::fs::create_dir(&dir).unwrap();
+    let source = "flowchart\nA --> B\n";
+    std::fs::write(dir.join("a.svg"), source).unwrap();
+    symlink("a.svg", dir.join("a.mmd")).unwrap();
+    symlink("a.svg", dir.join("b.mmd")).unwrap();
+    std::fs::write(dir.join("c.mmd"), source).unwrap();
+    sirene()
+        .arg("svg")
+        .arg(&dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("would overwrite input"));
+    assert_eq!(std::fs::read_to_string(dir.join("a.svg")).unwrap(), source);
+    assert!(dir.join("b.svg").exists());
+    assert!(dir.join("c.svg").exists());
+
+    // The output can instead alias a different input's symlink target.
+    std::fs::remove_file(dir.join("a.mmd")).unwrap();
+    std::fs::write(dir.join("a.mmd"), source).unwrap();
+    sirene()
+        .arg("svg")
+        .arg(&dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("would overwrite input"));
+    assert_eq!(std::fs::read_to_string(dir.join("a.svg")).unwrap(), source);
+
+    let out = tmp.path().join("out");
+    let shared = tmp.path().join("shared");
+    std::fs::create_dir(&out).unwrap();
+    std::fs::create_dir(&shared).unwrap();
+    for name in ["x", "y"] {
+        std::fs::create_dir(dir.join(name)).unwrap();
+        std::fs::write(dir.join(name).join("diagram.mmd"), source).unwrap();
+        symlink(&shared, out.join(name)).unwrap();
+    }
+    sirene()
+        .arg("svg")
+        .arg(&dir)
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("also writes"));
+    assert!(shared.join("diagram.svg").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn batch_replaces_output_symlink_without_touching_source() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let source = "flowchart\nA\n";
+    std::fs::write(dir.join("a.mmd"), source).unwrap();
+    symlink("a.mmd", dir.join("a.svg")).unwrap();
+    sirene().arg("svg").arg(dir).assert().success();
+    assert_eq!(std::fs::read_to_string(dir.join("a.mmd")).unwrap(), source);
+    assert!(
+        !std::fs::symlink_metadata(dir.join("a.svg"))
+            .unwrap()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn unreadable_directory() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
