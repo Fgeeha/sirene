@@ -149,6 +149,9 @@ fn failed_saves_show_the_error(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(dir.path()).unwrap();
     cx.dispatch_action(Save);
     cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Overwrite");
+    cx.run_until_parked();
     let status = viewer.read_with(cx, |v, _| v.status());
     assert!(status.starts_with("cannot write "), "{status}");
     assert_eq!(title(cx), "a.mmd (edited)");
@@ -211,9 +214,7 @@ fn saving_over_disk_changes_asks(cx: &mut TestAppContext) {
     let (viewer, cx) = open(cx, Document::open(&path));
     type_at(&viewer, cx, 1, 1, " --> Mine");
     write(dir.path(), "a.mmd", "flowchart LR\nA --> Theirs\n");
-    cx.executor().advance_clock(POLL);
-    cx.run_until_parked();
-
+    // Save before the next poll catches the external change.
     let saved = viewer.update_in(cx, |v, window, cx| v.save(window, cx));
     cx.run_until_parked();
     assert!(cx.has_pending_prompt());
@@ -327,4 +328,19 @@ fn new_and_open(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(cx.windows().len(), 4);
     assert_eq!(title(vcx), "a.mmd");
+}
+
+#[gpui::test]
+fn saving_unreadable_original_asks_before_overwrite(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("invalid.mmd");
+    std::fs::write(&path, [0xff]).unwrap();
+    let (viewer, cx) = open(cx, Document::open(&path));
+    let saved = viewer.update_in(cx, |v, window, cx| v.save(window, cx));
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    assert_eq!(saved.now_or_never(), Some(false));
+    assert_eq!(std::fs::read(&path).unwrap(), [0xff]);
 }

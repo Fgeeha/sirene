@@ -495,21 +495,31 @@ impl Viewer {
         if self.doc.path.is_none() {
             return self.save_as(window, cx);
         }
-        if !self.doc.disk_changed {
-            return Task::ready(self.write_file(window, cx));
-        }
+        let Some(conflict) = self
+            .doc
+            .path
+            .as_deref()
+            .and_then(|path| self.doc.save_conflict(path))
+        else {
+            return Task::ready(self.write_file(window, cx, None));
+        };
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("{} changed on disk. Overwrite it?", self.doc.name()),
-            Some("Saving replaces the changes made outside sirene."),
+            &format!(
+                "{} changed on disk or could not be read. Overwrite it?",
+                self.doc.name()
+            ),
+            Some("Saving replaces the existing file contents."),
             &["Overwrite", "Cancel"],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| match answer.await {
             Ok(0) => {
                 log::debug!("save: overwriting the changes made on disk");
-                this.update_in(cx, |v, window, cx| v.write_file(window, cx))
-                    .unwrap_or(false)
+                this.update_in(cx, |v, window, cx| {
+                    v.write_file(window, cx, Some(&conflict))
+                })
+                .unwrap_or(false)
             }
             Ok(_) => {
                 log::debug!("save cancelled");
@@ -524,8 +534,13 @@ impl Viewer {
     }
 
     /// Writes the document to its file. Returns whether it was written.
-    fn write_file(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let saved = self.doc.save().is_ok();
+    fn write_file(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        approved: Option<&crate::document::SaveConflict>,
+    ) -> bool {
+        let saved = self.doc.save_confirmed(approved).is_ok();
         self.refresh(window, cx);
         saved
     }
@@ -584,8 +599,42 @@ impl Viewer {
                     }
                 }
             }
+            let conflict = this
+                .update(cx, |v, _| v.doc.save_conflict(&path))
+                .ok()
+                .flatten();
+            if conflict.is_some() {
+                let answer = match this.update_in(cx, |v, window, cx| {
+                    window.prompt(
+                        PromptLevel::Warning,
+                        &format!(
+                            "{} changed on disk or could not be read. Overwrite it?",
+                            v.doc.name()
+                        ),
+                        Some("Saving replaces the existing file contents."),
+                        &["Overwrite", "Cancel"],
+                        cx,
+                    )
+                }) {
+                    Ok(answer) => answer,
+                    Err(_) => return false,
+                };
+                match answer.await {
+                    Ok(0) => {}
+                    Ok(_) => return false,
+                    Err(error) => {
+                        let error =
+                            sirene_core::Error::with_source("overwrite confirmation failed", error);
+                        let _ = this.update(cx, |v, cx| v.report_error(error, cx));
+                        return false;
+                    }
+                }
+            }
             this.update_in(cx, |v, window, cx| {
-                let saved = v.doc.save_as(path.clone()).is_ok();
+                let saved = v
+                    .doc
+                    .save_as_confirmed(path.clone(), conflict.as_ref())
+                    .is_ok();
                 if saved {
                     crate::note_recent(&path, cx);
                 }
