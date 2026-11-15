@@ -1,6 +1,7 @@
 //! Settings kept between launches: the appearance, recent files, the window size, and the
 //! source pane (GUISHE-10, GUISHE-11).
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use gpui::{App, Global};
@@ -216,15 +217,18 @@ impl Settings {
         let Some(file) = &self.file else {
             return Ok(());
         };
-        // Written beside, then renamed over, so a crash never leaves the file half written.
-        let mut temp = file.clone().into_os_string();
-        temp.push(".tmp");
-        let temp = PathBuf::from(temp);
-        let written = file
+        // Create an exclusive temporary file beside the destination, then atomically replace it.
+        let parent = file
             .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&temp, self.to_text()))
-            .and_then(|()| std::fs::rename(&temp, file));
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let written = (|| -> std::io::Result<()> {
+            std::fs::create_dir_all(parent)?;
+            let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+            temp.write_all(self.to_text().as_bytes())?;
+            temp.persist(file).map_err(|e| e.error)?;
+            Ok(())
+        })();
         written.map_err(|e| {
             Error::with_source(format!("cannot write settings to {}", file.display()), e)
         })?;
@@ -428,5 +432,80 @@ mod tests {
         s.appearance = Appearance::Dark;
         s.save().unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"appearance = light\n\xff\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_does_not_follow_old_temporary_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        let old_temp = dir.path().join("settings.tmp");
+        std::fs::write(&victim, "keep this").unwrap();
+        symlink(&victim, &old_temp).unwrap();
+        let settings = Settings {
+            file: Some(dir.path().join("settings")),
+            ..Settings::default()
+        };
+        settings.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep this");
+        assert!(
+            std::fs::symlink_metadata(old_temp)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn concurrent_saves_use_independent_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings");
+        let workers: Vec<_> = (0..8)
+            .map(|i| {
+                let file = file.clone();
+                std::thread::spawn(move || {
+                    let settings = Settings {
+                        file: Some(file),
+                        source_width: 200.0 + i as f32,
+                        ..Settings::default()
+                    };
+                    for _ in 0..20 {
+                        settings.save().unwrap();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let saved = std::fs::read_to_string(file).unwrap();
+        let candidates: Vec<_> = (0..8)
+            .map(|i| {
+                Settings {
+                    source_width: 200.0 + i as f32,
+                    ..Settings::default()
+                }
+                .to_text()
+            })
+            .collect();
+        assert!(
+            candidates.contains(&saved),
+            "unexpected settings: {saved:?}"
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_replace_cleans_up_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("settings");
+        std::fs::create_dir(&destination).unwrap();
+        let settings = Settings {
+            file: Some(destination),
+            ..Settings::default()
+        };
+        assert!(settings.save().is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }
