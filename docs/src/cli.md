@@ -154,6 +154,8 @@ update available: 0.4.0 -> 0.4.1 (target x86_64-unknown-linux-gnu)
 It never downgrades. A sirene installed by Homebrew or `cargo install` is refused with the
 command that updates it (`brew upgrade sirene`, `brew upgrade --cask sirene`, or
 `cargo install sirene`). `GH_TOKEN` or `GITHUB_TOKEN` authenticates the requests when set.
+With both `--check` and `--to`, sirene compares versions locally; it does not check whether the
+requested release or its archive exists.
 
 ## Watching
 

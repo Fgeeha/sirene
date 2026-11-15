@@ -11,14 +11,16 @@ Implemented in `crates/sirene/src/update.rs`. Tests: its unit tests, and `update
 release (GitHub's `releases/latest`, which is never a pre-release). `--check` prints the
 decision and changes nothing. Otherwise sirene asks `[y/N]` before replacing itself, unless
 `--yes`; with no terminal on stdin and no `--yes` it refuses. `--to` with `--check` makes no
-network request.
+network request and reports a newer version as a local comparison without asserting that a
+release or its archive exists.
 
 ## UPDATE-2 Target
 
 The release asset is `sirene-VERSION-TARGET.tar.gz` for the running build's target:
 `{x86_64,aarch64}-apple-darwin` on macOS, and `{x86_64,aarch64}-unknown-linux-{gnu,musl}` on
 Linux, keeping the build's C library, so a GUI (gnu) binary stays a GUI binary and a static
-(musl) one stays static. Other platforms are refused with a pointer to building from source.
+(musl) one stays static. The asset name must match that version and target exactly; a missing
+archive fails rather than selecting a different target. Other platforms are refused with a pointer to building from source.
 Every report names the target.
 
 ## UPDATE-3 Decision
@@ -27,7 +29,8 @@ Versions compare by semver precedence, so a `-dev` build of the next version is 
 release before it.
 
 - The target equals the running version: `sirene X is up to date`, exit 0.
-- The target is newer: the update, exit 0 (`--check` says `update available: X -> Y`).
+- The target is newer: the update, exit 0 (`--check` reports availability for the latest release,
+  or reports the version comparison and that availability was not checked for `--to`).
 - The target is older: from `releases/latest`, the running build is newer than the latest
   release, exit 0; from `--to`, a refusal to downgrade, exit 1.
 

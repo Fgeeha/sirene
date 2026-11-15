@@ -112,7 +112,10 @@ fn directory_entry_failures_fail_checks_and_batch_conversion() {
 }
 
 /// ERRORH-3: OS write errors produce failure rather than a panic exit.
-#[cfg(target_os = "linux")]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 fn failing_terminal_streams_do_not_panic() {
     use std::process::{Command as Process, Stdio};
@@ -2039,11 +2042,15 @@ fn state_diagrams() {
 }
 
 /// `update` decisions with `--to` make no network request (UPDATE-1, UPDATE-3, UPDATE-6).
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 fn update() {
     let current = env!("CARGO_PKG_VERSION");
     let target = predicate::str::is_match(
-        r"\(target (x86_64|aarch64)-(apple-darwin|unknown-linux-(gnu|musl))\)\n$",
+        r"\(target (x86_64|aarch64)-(apple-darwin|unknown-linux-(gnu|musl))\)",
     )
     .unwrap();
     sirene()
@@ -2051,8 +2058,9 @@ fn update() {
         .assert()
         .success()
         .stdout(predicate::str::starts_with(format!(
-            "update available: {current} -> 99.0.0 (target "
+            "99.0.0 is newer than sirene {current} (target "
         )))
+        .stdout(predicate::str::contains("release availability not checked"))
         .stdout(target.clone());
     sirene()
         .args(["update", "--check", "--to", current])
