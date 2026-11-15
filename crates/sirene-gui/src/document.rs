@@ -436,11 +436,11 @@ impl Document {
 
     /// Saves after approving the exact disk state returned by `save_conflict`.
     pub fn save_confirmed(&mut self, approved: Option<&SaveConflict>) -> Result<()> {
-        if let Some(path) = &self.path {
-            if let Err(e) = self.ensure_save_allowed(path, approved) {
-                self.write_error = Some(e.clone());
-                return Err(e);
-            }
+        if let Some(path) = &self.path
+            && let Err(e) = self.ensure_save_allowed(path, approved)
+        {
+            self.write_error = Some(e.clone());
+            return Err(e);
         }
         self.save_unchecked()
     }

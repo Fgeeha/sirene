@@ -829,24 +829,6 @@ fn status_with_errors(
     status
 }
 
-#[cfg(test)]
-mod status_tests {
-    use super::status_with_errors;
-    use sirene_core::Error;
-
-    #[test]
-    fn current_status_remains_visible_with_retained_errors() {
-        let settings = Error::new("settings failed");
-        let app = Error::new("open failed");
-        for current in ["save failed", "exported drawing"] {
-            let status = status_with_errors(current.into(), Some(&settings), Some(&app));
-            assert!(status.contains(current));
-            assert!(status.contains("settings failed"));
-            assert!(status.contains("open failed"));
-        }
-    }
-}
-
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme();
@@ -1067,5 +1049,23 @@ impl Render for Viewer {
                             .child(format!("{:.0}%", self.zoom * 100.0)),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::status_with_errors;
+    use sirene_core::Error;
+
+    #[test]
+    fn current_status_remains_visible_with_retained_errors() {
+        let settings = Error::new("settings failed");
+        let app = Error::new("open failed");
+        for current in ["save failed", "exported drawing"] {
+            let status = status_with_errors(current.into(), Some(&settings), Some(&app));
+            assert!(status.contains(current));
+            assert!(status.contains("settings failed"));
+            assert!(status.contains("open failed"));
+        }
     }
 }
