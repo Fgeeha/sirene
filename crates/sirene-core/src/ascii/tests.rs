@@ -6,6 +6,7 @@ fn draw(src: &str) -> String {
         &flowchart::parse(src).lower().flowchart,
         &Options::default(),
     )
+    .unwrap()
 }
 
 fn draw_ascii(src: &str) -> String {
@@ -15,6 +16,7 @@ fn draw_ascii(src: &str) -> String {
             charset: Charset::Ascii,
         },
     )
+    .unwrap()
 }
 
 /// Expected output from its rows.
@@ -56,11 +58,11 @@ fn blank_titles() {
         .flowchart;
     for blank in ["", " ", "\t \n"] {
         c.title = Some(blank.into());
-        assert_eq!(render(&c, &Options::default()), plain, "{blank:?}");
+        assert_eq!(render(&c, &Options::default()).unwrap(), plain, "{blank:?}");
     }
     c.title = Some("  T  ".into());
     assert_eq!(
-        render(&c, &Options::default()),
+        render(&c, &Options::default()).unwrap(),
         format!("      T\n\n{plain}")
     );
 }
@@ -446,7 +448,7 @@ fn control_characters_become_spaces() {
     let mut chart = flowchart::parse("flowchart\nA\n").lower().flowchart;
     chart.nodes[0].label = Label::plain("a\tb");
     assert_eq!(
-        render(&chart, &Options::default()),
+        render(&chart, &Options::default()).unwrap(),
         "┌─────┐\n│ a b │\n└─────┘\n"
     );
 }

@@ -310,12 +310,13 @@ impl<M: TextMetrics> Draw<'_, M> {
             children: cause.children.len(),
             drawn: 0,
         };
-        let mut bones: Vec<Option<Bone>> = vec![None; entries.len()];
+        // Flattening emits each parent before its children.
+        let mut bones: Vec<Bone> = Vec::with_capacity(entries.len());
         let (diag_x, diag_y) = (-cos, sin * dir);
         for (i, e) in entries.iter().enumerate() {
             let y = ys[i];
             let par = match e.parent {
-                Some(p) => bones[p].as_mut().expect("a parent bone is drawn first"),
+                Some(p) => &mut bones[p],
                 None => &mut root,
             };
             let (from, to, placed) = if e.depth.is_multiple_of(2) {
@@ -353,14 +354,12 @@ impl<M: TextMetrics> Draw<'_, M> {
             };
             self.bone(from, to, 1.0);
             left = left.min(self.text(placed, false));
-            if e.children > 0 {
-                bones[i] = Some(Bone {
-                    from,
-                    to,
-                    children: e.children,
-                    drawn: 0,
-                });
-            }
+            bones.push(Bone {
+                from,
+                to,
+                children: e.children,
+                drawn: 0,
+            });
         }
         left
     }

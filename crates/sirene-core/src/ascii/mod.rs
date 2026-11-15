@@ -105,7 +105,7 @@ pub const CONFIG: Config = Config {
 };
 
 /// Renders `chart` as text (ASCIIR-1).
-pub fn render(chart: &Flowchart, options: &Options) -> String {
+pub fn render(chart: &Flowchart, options: &Options) -> crate::Result<String> {
     // Collapsed subgraphs (FLOWMO-15) are drawn folded into nodes.
     let folded = chart.collapsed();
     let chart = folded.as_ref().map_or(chart, |c| &c.chart);
@@ -115,9 +115,9 @@ pub fn render(chart: &Flowchart, options: &Options) -> String {
         .then(|| guillemets_to_ascii(chart))
         .flatten();
     let chart = plain.as_ref().unwrap_or(chart);
-    let graph = chart.layout_graph(&Cells);
-    let layout = layout::layout(&graph, &CONFIG);
-    draw(chart, &layout, options)
+    let graph = chart.layout_graph(&Cells)?;
+    let layout = layout::layout(&graph, &CONFIG)?;
+    Ok(draw(chart, &layout, options))
 }
 
 /// `chart` with `«` and `»` in its text written `<<` and `>>`, or `None` when it has none.

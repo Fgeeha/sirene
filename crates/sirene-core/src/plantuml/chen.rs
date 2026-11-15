@@ -49,11 +49,10 @@ impl Lower {
         self.chart.nodes.push(n);
     }
 
-    fn line(&mut self, from: &str, to: &str, range: TextRange) -> &mut Edge {
+    fn line(from: &str, to: &str, range: TextRange) -> Edge {
         let mut e = Edge::new(from, to, range);
         e.end = None;
-        self.chart.edges.push(e);
-        self.chart.edges.last_mut().expect("just pushed")
+        e
     }
 
     /// `entity` or `relationship` and its optional `{` attribute block.
@@ -145,8 +144,8 @@ impl Lower {
             };
             let id = format!("attr:{}", self.attributes);
             self.attributes += 1;
-            self.node(id.clone(), label, Shape::Ellipse, line.range);
-            let node = self.chart.nodes.last_mut().expect("just pushed");
+            let mut node = Node::new(&id, label, Shape::Ellipse);
+            node.mentions.push(line.range);
             for k in &kinds {
                 match k.as_str() {
                     "key" => {}
@@ -158,7 +157,8 @@ impl Lower {
                     )),
                 }
             }
-            self.line(owner, &id, line.range);
+            self.chart.nodes.push(node);
+            self.chart.edges.push(Self::line(owner, &id, line.range));
             if block {
                 if depth >= MAX_DEPTH {
                     self.d.push(Diagnostic::new(
@@ -210,14 +210,17 @@ impl Lower {
                 Shape::Circle,
                 line.range,
             );
-            self.line(&from, &id, line.range).stroke = stroke;
+            let mut edge = Self::line(&from, &id, line.range);
+            edge.stroke = stroke;
+            self.chart.edges.push(edge);
             for child in list.split(',').map(|c| lines::id_of(c.trim())) {
                 if child.is_empty() || !self.known(&child, line) {
                     continue;
                 }
-                let e = self.line(&id, &child, line.range);
+                let mut e = Self::line(&id, &child, line.range);
                 e.stroke = stroke;
                 e.start = Some(Arrow::Point);
+                self.chart.edges.push(e);
             }
             return true;
         }
@@ -237,7 +240,7 @@ impl Lower {
         if !(self.known(&from, line) & self.known(&to, line)) {
             return true;
         }
-        let e = self.line(&from, &to, line.range);
+        let mut e = Self::line(&from, &to, line.range);
         e.stroke = stroke;
         match inner {
             ">" => e.end = Some(Arrow::Point),
@@ -248,6 +251,7 @@ impl Lower {
                 e.label = Some(Label::plain(card));
             }
         }
+        self.chart.edges.push(e);
         true
     }
 

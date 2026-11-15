@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -197,7 +205,10 @@ fn texts(s: &Scene) -> Vec<(String, Pt)> {
 fn drawing() {
     let src =
         "---\nconfig:\n  packet:\n    bitsPerRow: 8\n---\npacket\n  0-3: \"A\"\n  4-11: \"B\"\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     let all = |want: &str| -> Vec<Pt> {
         t.iter()
@@ -216,7 +227,8 @@ fn drawing() {
     let s =
         diagram::lower(&src.replace("bitsPerRow: 8", "bitsPerRow: 8\n    bitOrder: descending"))
             .diagram
-            .scene(&Approx, &Theme::LIGHT);
+            .scene(&Approx, &Theme::LIGHT)
+            .unwrap();
     let t = texts(&s);
     let at = |want: &str| t.iter().find(|(x, _)| x == want).map(|&(_, p)| p).unwrap();
     assert!(at("A").x > at("B").x && at("0").x > at("3").x);

@@ -272,9 +272,9 @@ impl Diagram {
     }
 
     /// The drawing, with text measured by `metrics` (DISPLA-1).
-    pub fn scene(&self, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
-        match self {
-            Diagram::Graph(f) => scene::flowchart(f, metrics, theme),
+    pub fn scene(&self, metrics: &impl TextMetrics, theme: &Theme) -> crate::Result<Scene> {
+        Ok(match self {
+            Diagram::Graph(f) => return scene::flowchart(f, metrics, theme),
             Diagram::Sequence(s) => scene::sequence(s, metrics, theme),
             Diagram::Git(g) => scene::git_graph(g, metrics, theme),
             Diagram::Timeline(t) => scene::timeline(t, metrics, theme),
@@ -289,9 +289,9 @@ impl Diagram {
             Diagram::Radar(r) => scene::radar(r, metrics, theme),
             Diagram::Sankey(s) => scene::sankey(s, metrics, theme),
             Diagram::Treemap(t) => scene::treemap(t, metrics, theme),
-            Diagram::Block(b) => scene::block(b, metrics, theme),
-            Diagram::Architecture(a) => scene::architecture(a, metrics, theme),
-            Diagram::C4(c) => scene::c4(c, metrics, theme),
+            Diagram::Block(b) => return scene::block(b, metrics, theme),
+            Diagram::Architecture(a) => return scene::architecture(a, metrics, theme),
+            Diagram::C4(c) => return scene::c4(c, metrics, theme),
             Diagram::Info(i) => scene::info(i, metrics, theme),
             Diagram::Ishikawa(i) => scene::ishikawa(i, metrics, theme),
             Diagram::Venn(v) => scene::venn(v, metrics, theme),
@@ -301,13 +301,13 @@ impl Diagram {
             Diagram::Cynefin(c) => scene::cynefin(c, metrics, theme),
             Diagram::EventModel(c) => scene::eventmodel(c, metrics, theme),
             Diagram::Timing(t) => scene::timing(t, metrics, theme),
-        }
+        })
     }
 
     /// The drawing as text (ASCIIR-1).
-    pub fn ascii(&self, options: &Options) -> String {
-        match self {
-            Diagram::Graph(f) => ascii::render(f, options),
+    pub fn ascii(&self, options: &Options) -> crate::Result<String> {
+        Ok(match self {
+            Diagram::Graph(f) => return ascii::render(f, options),
             Diagram::Sequence(s) => ascii::sequence(s, options),
             Diagram::Git(g) => ascii::git_graph(g, options),
             Diagram::Timeline(t) => ascii::timeline(t, options),
@@ -334,7 +334,7 @@ impl Diagram {
             Diagram::Cynefin(c) => ascii::cynefin(c, options),
             Diagram::EventModel(c) => ascii::eventmodel(c, options),
             Diagram::Timing(t) => ascii::timing(t, options),
-        }
+        })
     }
 }
 

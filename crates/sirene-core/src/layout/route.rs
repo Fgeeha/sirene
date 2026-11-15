@@ -59,12 +59,13 @@ pub(super) fn tracks(jogs: &[Jog]) -> (Vec<Option<usize>>, usize) {
             .map(|t: usize| t + 1)
             .max()
             .unwrap_or(0);
-        let t = (min..)
-            .find(|&t| {
-                rows.get(t)
-                    .is_none_or(|row| row.iter().all(|o| o.hi() < j.lo() || j.hi() < o.lo()))
-            })
-            .expect("an empty track exists");
+        let mut t = min;
+        while rows
+            .get(t)
+            .is_some_and(|row| row.iter().any(|o| o.hi() >= j.lo() && j.hi() >= o.lo()))
+        {
+            t += 1;
+        }
         if rows.len() <= t {
             rows.resize(t + 1, Vec::new());
         }

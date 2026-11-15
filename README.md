@@ -62,6 +62,12 @@ sirene check docs/ a.md      # report errors only; exit 1 if any
 sirene update                # replace sirene with the latest release
 ```
 
+Use `sirene -v ...` for debug logs or `-vv` for trace logs on stderr. Set
+`SIRENE_LOG=debug` to enable logs through the environment, or select modules with
+`SIRENE_LOG=sirene_core=trace,sirene_gui=debug`. `RUST_LOG` is also supported;
+`SIRENE_LOG` takes precedence. Explicit module filters remain effective with verbose flags.
+Errors include the operation and its underlying causes.
+
 See [Command line](https://jaemk.github.io/sirene/guide/cli.html) for every option, and
 [The editor](https://jaemk.github.io/sirene/guide/editor.html) and
 [Keys](https://jaemk.github.io/sirene/guide/keys.html) for the GUI. `examples/` has diagrams to

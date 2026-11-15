@@ -6,6 +6,28 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Logging through `SIRENE_LOG` or `RUST_LOG`, with module filters, severity labels, and `-vv`
+  for trace output. Logs go to stderr and keep rendered stdout unchanged.
+- A shared, cloneable `sirene_core::Error` that retains typed causes and reports the full
+  causal chain.
+
+### Changed
+
+- Library graph construction and generic ASCII/scene rendering now return results, so invalid
+  graph references can be reported to callers. PNG, editor, and release-tool errors retain
+  their underlying causes.
+- Production crates reject explicit panic, unwrap, expect, and unreachable calls through
+  Clippy; tests can still use them.
+
+### Fixed
+
+- Clicking C4 or architecture nodes no longer indexes an empty flowchart model.
+- Failed terminal writes, directory traversal, confirmation input, and file dialogs are
+  reported as errors. Settings persistence failures remain observable in the editor.
+- Parsers reject source beyond their representable byte limit with a diagnostic.
+
 ## [0.4.0] - 2026-11-14
 
 ### Added

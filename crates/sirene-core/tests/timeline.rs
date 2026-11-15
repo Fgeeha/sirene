@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -187,21 +195,28 @@ fn center(s: &sirene_core::scene::Scene, want: &str) -> Pt {
 #[test]
 fn drawing() {
     let src = "timeline\n  section S\n  a : e1 : e2\n  b : f\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let (sec, a, b) = (center(&s, "S"), center(&s, "a"), center(&s, "b"));
     let (e1, e2) = (center(&s, "e1"), center(&s, "e2"));
     assert!(sec.y < a.y && a.x < b.x && (a.y - b.y).abs() < 0.1);
     assert!(a.y < e1.y && e1.y < e2.y && (e1.x - a.x).abs() < 0.1);
     let s = diagram::lower(&src.replace("timeline", "timeline TD"))
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let (sec, a, b) = (center(&s, "S"), center(&s, "a"), center(&s, "b"));
     let (e1, e2) = (center(&s, "e1"), center(&s, "e2"));
     assert!(sec.x < a.x && a.y < b.y);
     assert!(a.x < e1.x && e1.x < e2.x && (e1.y - a.y).abs() < 0.1);
     // Long text wraps.
     let long = "timeline\n  p : one two three four five six seven eight nine ten eleven twelve\n";
-    let s = diagram::lower(long).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(long)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let texts = s
         .elements
         .iter()

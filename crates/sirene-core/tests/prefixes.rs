@@ -52,8 +52,8 @@ fn fixture_prefixes_draw() {
         let draw = |text: &str, what: &str| {
             let run = std::panic::catch_unwind(|| {
                 let lowered = diagram::lower_as(text, lang);
-                let s = lowered.diagram.scene(&Approx, &Theme::LIGHT);
-                lowered.diagram.ascii(&Options::default());
+                let s = lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
+                lowered.diagram.ascii(&Options::default()).unwrap();
                 svg::write(&s)
             });
             let doc = run.unwrap_or_else(|_| panic!("{} {what}:\n{text}", path.display()));
@@ -77,9 +77,12 @@ fn fixture_prefixes_draw() {
         }
         // With the ASCII charset, no drawing characters (box drawing, blocks, shapes, arrows,
         // guillemets, dots) are used except those in the source's own text.
-        let text = diagram::lower_as(&src, lang).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let text = diagram::lower_as(&src, lang)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         let drawing = |c: char| matches!(c, '\u{2190}'..='\u{21ff}' | '\u{2500}'..='\u{25ff}' | '«' | '»' | '·' | '…');
         let stray: String = text
             .chars()

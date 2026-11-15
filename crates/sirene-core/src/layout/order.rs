@@ -91,11 +91,13 @@ fn reorder(layer: &mut [usize], adj: &[Vec<usize>], pos: &mut [usize]) {
         })
         .collect();
     movable.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-    let mut next = movable.into_iter();
-    for slot in layer.iter_mut() {
-        if !adj[*slot].is_empty() {
-            *slot = next.next().expect("one movable element per movable slot").2;
-        }
+    let next = movable.into_iter();
+    for (slot, (_, _, element)) in layer
+        .iter_mut()
+        .filter(|slot| !adj[**slot].is_empty())
+        .zip(next)
+    {
+        *slot = element;
     }
     for (i, &e) in layer.iter().enumerate() {
         pos[e] = i;

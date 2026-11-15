@@ -574,10 +574,14 @@ pub fn remove_class(src: &str, ids: &[&str], name: &str) -> Option<TextEdit> {
 pub fn fresh_class_name(src: &str) -> String {
     let doc = Doc::new(src);
     let named = doc.named();
-    (1..)
-        .map(|n| format!("style{n}"))
-        .find(|c| !named.contains(c) && !doc.chart.classes.iter().any(|d| d.name == *c))
-        .expect("names are unbounded")
+    let mut n = 1usize;
+    loop {
+        let candidate = format!("style{n}");
+        if !named.contains(&candidate) && !doc.chart.classes.iter().any(|d| d.name == candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 /// Adds an invisible edge (`~~~`) from `a` to `b`, which lays them out like linked nodes without
@@ -1121,7 +1125,8 @@ impl Chain {
     fn scope(&self) -> TextRange {
         self.syntax
             .parent()
-            .expect("statements have a parent")
+            .as_ref()
+            .unwrap_or(&self.syntax)
             .text_range()
     }
 }
@@ -1152,7 +1157,9 @@ impl<'a> Doc<'a> {
         let mut out = String::with_capacity(self.src.len());
         let mut at = 0;
         for (range, text) in edits {
-            debug_assert!(range.start >= at || text.is_empty(), "overlapping edits");
+            if range.start < at && !text.is_empty() {
+                return None;
+            }
             out.push_str(&self.src[at.min(range.start)..range.start]);
             out.push_str(&text);
             at = at.max(range.end);
@@ -1434,10 +1441,14 @@ impl<'a> Doc<'a> {
     /// The first `groupN` id not used by a node, subgraph, or edge, nor named in the source.
     fn fresh_group_id(&self) -> String {
         let named = self.named();
-        (1..)
-            .map(|n| format!("group{n}"))
-            .find(|id| !named.contains(id) && !self.used(id))
-            .expect("ids are unbounded")
+        let mut n = 1usize;
+        loop {
+            let candidate = format!("group{n}");
+            if !named.contains(&candidate) && !self.used(&candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
     }
 
     /// Every identifier in the source.
@@ -1461,11 +1472,19 @@ impl<'a> Doc<'a> {
     /// nor named in the source (as by a `class` statement for a node not written yet).
     fn fresh_id(&self) -> String {
         let named = self.named();
-        ('A'..='Z')
-            .map(String::from)
-            .chain((1..).map(|n| format!("n{n}")))
-            .find(|id| !named.contains(id) && !self.used(id))
-            .expect("ids are unbounded")
+        for candidate in ('A'..='Z').map(String::from) {
+            if !named.contains(&candidate) && !self.used(&candidate) {
+                return candidate;
+            }
+        }
+        let mut n = 1usize;
+        loop {
+            let candidate = format!("n{n}");
+            if !named.contains(&candidate) && !self.used(&candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
     }
 }
 

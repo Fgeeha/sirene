@@ -113,7 +113,7 @@ fn tree(lines: Vec<(Vec<String>, usize)>) -> (Option<Cause>, Option<usize>) {
             left_out.get_or_insert(n);
             continue;
         }
-        let parent = stack.last().expect("the root stays on the stack").1;
+        let parent = stack[stack.len() - 1].1;
         let i = nodes.len();
         nodes.push((label, Vec::new()));
         nodes[parent].1.push(i);

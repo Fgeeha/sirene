@@ -406,3 +406,34 @@ fn subgraphs_and_missing_items(cx: &mut TestAppContext) {
     assert!(field(&viewer, cx).is_none());
     assert!(selection(&viewer, cx).is_empty());
 }
+
+/// ERRORH-1: scene owners from non-graph diagrams never index the flowchart model.
+#[gpui::test]
+fn read_only_scene_nodes_ignore_graph_selection(cx: &mut TestAppContext) {
+    use sirene_core::scene::{Owner, Pt};
+    for source in [
+        "C4Context\nPerson(user, User)\n",
+        "architecture-beta\nservice api(server)[API]\n",
+    ] {
+        let (viewer, vcx) = open_src(cx, source);
+        let at = vcx.update(|window, cx| {
+            viewer.update(cx, |v, _| {
+                assert!(v.doc.other.is_some());
+                assert!(v.doc.chart.nodes.is_empty());
+                let scene = v.scene(window);
+                let (lo, hi) = scene.bounds(Owner::Node(0)).expect("diagram draws a node");
+                let center = Pt::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
+                assert_eq!(scene.hit(center, 4.0), Some(Owner::Node(0)));
+                let at = v.placement(window).map(center);
+                assert_eq!(v.item_at(at, window), None);
+                at
+            })
+        });
+        click(vcx, at, Modifiers::none());
+        vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        vcx.run_until_parked();
+        assert!(selection(&viewer, vcx).is_empty());
+        assert_eq!(viewer.read_with(vcx, |v, _| v.doc.source.clone()), source);
+    }
+}

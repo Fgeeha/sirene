@@ -23,9 +23,9 @@ fn check(d: &Diagram) -> Result<(), TestCaseError> {
         _ => {}
     }
     for charset in [Charset::Unicode, Charset::Ascii] {
-        d.ascii(&Options { charset });
+        d.ascii(&Options { charset }).unwrap();
     }
-    d.scene(&Approx, &Theme::LIGHT);
+    d.scene(&Approx, &Theme::LIGHT).unwrap();
     Ok(())
 }
 

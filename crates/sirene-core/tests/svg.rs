@@ -29,7 +29,7 @@ fn fixtures() -> Vec<(String, String)> {
 fn svg_snapshots() {
     for (name, src) in fixtures() {
         let chart = flowchart::parse(&src).lower().flowchart;
-        let out = scene::svg::write(&scene::flowchart(&chart, &Approx, &Theme::LIGHT));
+        let out = scene::svg::write(&scene::flowchart(&chart, &Approx, &Theme::LIGHT).unwrap());
         insta::assert_snapshot!(format!("svg__{name}"), out, &src);
     }
 }

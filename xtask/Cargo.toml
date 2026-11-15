@@ -8,6 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+sirene-core.workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 getrandom = "0.3.4"
 icns = { version = "0.5.0", default-features = false, features = ["pngio"] }
@@ -18,6 +19,7 @@ tempfile = "3.27.0"
 zipsign-api = { version = "0.2.2", default-features = false, features = ["sign-tar"] }
 
 [dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }
 assert_cmd = "2.2.2"
 flate2 = "1"
 predicates = "3.1.4"

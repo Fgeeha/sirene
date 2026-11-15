@@ -133,7 +133,7 @@ pub(crate) fn edge_style(edge: &SyntaxNode) -> Option<(Stroke, Option<Arrow>, Op
     } else {
         (Stroke::Normal, line.len() - 2)
     };
-    let length = u8::try_from(length.clamp(1, 10)).expect("clamped");
+    let length = length.clamp(1, 10) as u8;
     if kind == Stroke::Invisible {
         return Some((kind, None, None, length));
     }
@@ -307,7 +307,7 @@ impl Lowerer {
             .filter(|s| nested(&s.id))
             .map(|s| {
                 (
-                    TextRange::at(s.range.start(), "subgraph".len().try_into().unwrap()),
+                    TextRange::at(s.range.start(), crate::TextSize::new(8)),
                     s.id.clone(),
                 )
             })
@@ -686,7 +686,13 @@ impl Lowerer {
 
     /// FLOWMO-9, FLOWMO-10. Returns the subgraph's id.
     fn subgraph(&mut self, syntax: &SyntaxNode) -> String {
-        let header = child(syntax, SUBGRAPH_HEADER).expect("subgraph without a header");
+        let header = match child(syntax, SUBGRAPH_HEADER) {
+            Some(header) => header,
+            None => {
+                self.error(syntax.text_range(), "subgraph has no header");
+                syntax.clone()
+            }
+        };
         let (explicit, mut title) = subgraph_header(&header);
         // MAGF-2: a `flow` is titled only by `flow id["Title"]`.
         if self.chart.agentflow && child(&header, SHAPE).is_none() {

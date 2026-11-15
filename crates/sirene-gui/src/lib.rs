@@ -1,3 +1,14 @@
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
 #![doc = include_str!("../README.md")]
 // The window's behavior: GUISHE-* in spec/gui-shell.md, WYSIWY-* in spec/wysiwyg-editing.md.
 
@@ -27,6 +38,40 @@ use navigation::{PAN_FAR, PAN_STEP};
 use settings::{Appearance, Settings};
 use sirene_core::flowchart::{Arrow, Direction, Shape, Stroke};
 use viewer::Viewer;
+
+/// Turns a platform dialog's nested result into an explicit cancel, choice, or error.
+pub(crate) fn dialog_result<T>(
+    result: std::result::Result<anyhow::Result<Option<T>>, futures::channel::oneshot::Canceled>,
+    operation: &str,
+) -> sirene_core::Result<Option<T>> {
+    match result {
+        Ok(Ok(choice)) => Ok(choice),
+        Ok(Err(error)) => Err(sirene_core::Error::with_boxed_source(
+            operation,
+            error.reallocate_into_boxed_dyn_error_without_backtrace(),
+        )),
+        Err(error) => Err(sirene_core::Error::with_source(operation, error)),
+    }
+}
+
+/// The last app-level failure remains observable when no dialog window was available.
+struct ApplicationError(sirene_core::Error);
+impl gpui::Global for ApplicationError {}
+
+fn report_app_error(error: sirene_core::Error, cx: &mut App) {
+    if log::log_enabled!(log::Level::Error) {
+        log::error!("{}", error.report());
+    } else {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr().lock(), "error: {}", error.report());
+    }
+    cx.set_global(ApplicationError(error));
+    cx.refresh_windows();
+}
+
+pub(crate) fn last_app_error(cx: &App) -> Option<&sirene_core::Error> {
+    cx.try_global::<ApplicationError>().map(|error| &error.0)
+}
 
 actions!(
     sirene,
@@ -366,7 +411,7 @@ pub fn init(cx: &mut App) {
         cx.spawn(async move |cx| {
             if quit.await {
                 cx.update(|cx| {
-                    settings::get(cx).save();
+                    settings::save(cx);
                     cx.quit()
                 });
             }
@@ -481,18 +526,26 @@ fn open_or_report(doc: Document, cx: &mut App) {
     let name = doc.name();
     match open_window(doc, cx) {
         Ok(_) => log::debug!("opened a window for {name}"),
-        Err(e) => eprintln!("error: cannot open a window for {name}: {e}"),
+        Err(e) => report_app_error(
+            sirene_core::Error::with_boxed_source(
+                format!("cannot open a window for {name}"),
+                e.reallocate_into_boxed_dyn_error_without_backtrace(),
+            ),
+            cx,
+        ),
     }
 }
 
 /// Asks for files and opens each in a new window.
 pub fn prompt_open(cx: &mut App) {
     let chosen = cx.prompt_for_paths(open_options());
-    cx.spawn(async move |cx| match chosen.await {
-        Ok(Ok(Some(paths))) => cx.update(|cx| open_paths(&paths, cx)),
-        Ok(Err(e)) => log::debug!("the open dialog failed: {e}"),
-        _ => log::debug!("open cancelled"),
-    })
+    cx.spawn(
+        async move |cx| match dialog_result(chosen.await, "open dialog failed") {
+            Ok(Some(paths)) => cx.update(|cx| open_paths(&paths, cx)),
+            Ok(None) => log::debug!("open cancelled"),
+            Err(error) => cx.update(|cx| report_app_error(error, cx)),
+        },
+    )
     .detach();
 }
 
@@ -680,6 +733,45 @@ pub fn run(paths: Vec<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ERRORH-5: only an explicit empty choice is cancellation.
+    #[test]
+    fn dialog_errors_are_distinct_from_cancellation() {
+        use std::error::Error as _;
+        assert_eq!(
+            dialog_result::<usize>(Ok(Ok(None)), "choose file").unwrap(),
+            None
+        );
+        assert_eq!(
+            dialog_result(Ok(Ok(Some(3))), "choose file").unwrap(),
+            Some(3)
+        );
+        let source = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "portal denied");
+        let error =
+            dialog_result::<usize>(Ok(Err(anyhow::Error::new(source))), "choose file").unwrap_err();
+        assert!(error.report().contains("portal denied"));
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let (sender, receiver) =
+            futures::channel::oneshot::channel::<anyhow::Result<Option<usize>>>();
+        drop(sender);
+        let result = futures::executor::block_on(receiver);
+        let error = dialog_result(result, "choose file").unwrap_err();
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<futures::channel::oneshot::Canceled>()
+                .is_some()
+        );
+    }
 
     #[test]
     fn file_urls() {

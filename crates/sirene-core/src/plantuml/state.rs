@@ -275,7 +275,14 @@ impl Lower {
         let n = regions.max(1);
         self.region_count.insert(composite.clone(), n + 1);
         let id = format!("{composite}:{n}");
-        self.stack.last_mut().expect("checked above").scope = id.clone();
+        let Some(open) = self.stack.last_mut() else {
+            self.d.push(Diagnostic::new(
+                line.range,
+                "a region requires an open composite state",
+            ));
+            return;
+        };
+        open.scope = id.clone();
         let mut region = Subgraph::new(&id, Label::default(), line.range);
         region.region = true;
         self.subgraph(region, &composite);

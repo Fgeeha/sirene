@@ -42,7 +42,7 @@ fn snapshots() {
             lowered.diagnostics
         );
         for charset in [Charset::Unicode, Charset::Ascii] {
-            let out = lowered.diagram.ascii(&Options { charset });
+            let out = lowered.diagram.ascii(&Options { charset }).unwrap();
             let kind = match charset {
                 Charset::Unicode => "valid",
                 Charset::Ascii => "ascii",
@@ -50,7 +50,7 @@ fn snapshots() {
             insta::assert_snapshot!(format!("{kind}__{name}"), out, &src);
         }
         for theme in [Theme::LIGHT, Theme::DARK] {
-            let s = lowered.diagram.scene(&Approx, &theme);
+            let s = lowered.diagram.scene(&Approx, &theme).unwrap();
             assert!(!s.elements.is_empty(), "{name}");
         }
     }
@@ -133,7 +133,10 @@ fn warnings() {
 #[test]
 fn drawing() {
     let texts = |src: &str| {
-        let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+        let s = diagram::lower(src)
+            .diagram
+            .scene(&Approx, &Theme::LIGHT)
+            .unwrap();
         let t: Vec<String> = s
             .elements
             .iter()

@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -262,7 +270,10 @@ fn texts(s: &Scene) -> Vec<(String, Pt)> {
 #[test]
 fn drawing() {
     let src = "---\ntitle: Map\n---\nmindmap\n  root((Root))\n    a\n      a1\n        a11\n    b\n    c\n    d\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     let at = |want: &str| {
         t.iter()
@@ -325,12 +336,14 @@ fn drawing() {
     // One branch goes right; an empty mindmap is just its margins.
     let s = diagram::lower("mindmap\n  r\n    x\n")
         .diagram
-        .scene(&Approx, &Theme::DARK);
+        .scene(&Approx, &Theme::DARK)
+        .unwrap();
     let t = texts(&s);
     assert!(t[1].1.x > t[0].1.x);
     let s = diagram::lower("mindmap\n")
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     assert!(s.elements.is_empty());
     assert_eq!((s.width, s.height), (32.0, 32.0));
 }
@@ -343,7 +356,10 @@ fn is_edge(segments: &[Segment]) -> bool {
 #[test]
 fn shapes() {
     let src = "mindmap\n  r[R]\n    a(A)\n    b((B))\n    c)C(\n    d))D((\n    e{{E}}\n    f\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let count =
         |want: fn(&Primitive) -> bool| s.elements.iter().filter(|e| want(&e.primitive)).count();
     assert_eq!(

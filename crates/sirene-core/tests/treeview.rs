@@ -41,7 +41,7 @@ fn snapshots() {
             lowered.diagnostics
         );
         for charset in [Charset::Unicode, Charset::Ascii] {
-            let out = lowered.diagram.ascii(&Options { charset });
+            let out = lowered.diagram.ascii(&Options { charset }).unwrap();
             let kind = match charset {
                 Charset::Unicode => "valid",
                 Charset::Ascii => "ascii",
@@ -49,7 +49,7 @@ fn snapshots() {
             insta::assert_snapshot!(format!("{kind}__{name}"), out, &src);
         }
         for theme in [Theme::LIGHT, Theme::DARK] {
-            let s = lowered.diagram.scene(&Approx, &theme);
+            let s = lowered.diagram.scene(&Approx, &theme).unwrap();
             assert!(!s.elements.is_empty(), "{name}");
         }
     }
@@ -88,7 +88,8 @@ fn model() {
         "---\nconfig:\n  treeView:\n    rowIndent: 1e38\n---\ntreeView-beta\n  a\n    b\n",
     )
     .diagram
-    .scene(&Approx, &Theme::LIGHT);
+    .scene(&Approx, &Theme::LIGHT)
+    .unwrap();
     assert!(s.width.is_finite() && s.height.is_finite());
 }
 
@@ -114,7 +115,8 @@ fn problems() {
 fn drawing() {
     let s = diagram::lower("treeView-beta\n  src/\n    a.ts\n")
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let texts: Vec<&str> = s
         .elements
         .iter()

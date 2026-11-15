@@ -381,13 +381,13 @@ proptest! {
 
     #[test]
     fn cell_layouts(g in graph()) {
-        let l = layout(&g, &ascii::CONFIG);
+        let l = layout(&g, &ascii::CONFIG).unwrap();
         check(&g, &l)?;
-        prop_assert_eq!(&l, &layout(&g, &ascii::CONFIG), "layout is deterministic");
+        prop_assert_eq!(&l, &layout(&g, &ascii::CONFIG).unwrap(), "layout is deterministic");
     }
 
     #[test]
     fn pixel_layouts(g in graph()) {
-        check(&g, &layout(&g, &PIXELS))?;
+        check(&g, &layout(&g, &PIXELS).unwrap())?;
     }
 }

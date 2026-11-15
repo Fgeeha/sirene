@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -238,7 +246,10 @@ fn curve_points(s: &Scene, k: usize) -> Vec<Pt> {
 #[test]
 fn drawing() {
     let src = "radar-beta\n  axis n[\"North\"], e[\"East\"], s[\"South\"], w[\"West\"]\n  curve c[\"Cee\"]{10, 5, 0, 10}\n  max 10\n";
-    let s = diagram::lower(src).diagram.scene(&Approx, &Theme::LIGHT);
+    let s = diagram::lower(src)
+        .diagram
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     let t = texts(&s);
     let at = |want: &str| t.iter().find(|(x, _)| x == want).map(|&(_, p)| p).unwrap();
     let (n, e, so, w) = (at("North"), at("East"), at("South"), at("West"));
@@ -258,6 +269,7 @@ fn drawing() {
     let hidden = src.replace("max 10", "max 10\n  showLegend false");
     let s = diagram::lower(&hidden)
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     assert!(!texts(&s).iter().any(|(x, _)| x == "Cee"));
 }

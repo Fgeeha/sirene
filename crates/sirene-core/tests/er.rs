@@ -62,11 +62,16 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
-            let s = lowered.diagram.scene(&Approx, &Theme::LIGHT);
+            let s = lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
             assert!(!s.elements.is_empty(), "{name}");
         }
     }
@@ -81,7 +86,8 @@ fn ascii_charset_snapshots() {
             &Options {
                 charset: Charset::Ascii,
             },
-        );
+        )
+        .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -231,7 +237,7 @@ fn names_and_styling() {
 #[test]
 fn drawing() {
     let c = chart("erDiagram\n  A ||--o{ B : has\n  C |o..|{ D\n");
-    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT);
+    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
     let texts: Vec<&str> = s
         .elements
         .iter()
@@ -241,7 +247,7 @@ fn drawing() {
         })
         .collect();
     assert!(texts.contains(&"has"), "{texts:?}");
-    let out = ascii::render(&c, &Options::default());
+    let out = ascii::render(&c, &Options::default()).unwrap();
     for want in ["1", "*", "?", "+"] {
         assert!(out.contains(want), "{want}:\n{out}");
     }

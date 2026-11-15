@@ -256,10 +256,12 @@ fn state_diagrams_are_read_only(cx: &mut TestAppContext) {
         Some("drawing edits are not supported for git graphs yet")
     );
     assert!(git.chart.nodes.is_empty() && git.other.is_some());
-    let scene = git.scene(
-        &sirene_core::scene::Approx,
-        &sirene_core::scene::Theme::LIGHT,
-    );
+    let scene = git
+        .scene(
+            &sirene_core::scene::Approx,
+            &sirene_core::scene::Theme::LIGHT,
+        )
+        .unwrap();
     assert!(
         scene
             .elements

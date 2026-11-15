@@ -60,11 +60,16 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
-            let s = lowered.diagram.scene(&Approx, &Theme::LIGHT);
+            let s = lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
             assert!(!s.elements.is_empty(), "{name}");
         }
     }
@@ -79,7 +84,8 @@ fn ascii_charset_snapshots() {
             &Options {
                 charset: Charset::Ascii,
             },
-        );
+        )
+        .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -306,7 +312,7 @@ fn nested_generics() {
 #[test]
 fn superclasses_rank_above() {
     let c = chart("classDiagram\n  Animal <|-- Duck\n");
-    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT);
+    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
     let top = |i| s.bounds(scene::Owner::Node(i)).unwrap().0.y;
     assert!(top(0) < top(1));
 }
@@ -317,7 +323,7 @@ fn drawing() {
     let c = chart(
         "classDiagram\n  A \"1\" *-- \"many\" B\n  C o-- D\n  E <|-- F\n  class G {\n    +make()$\n  }\n",
     );
-    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT);
+    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
     let texts: Vec<&str> = s
         .elements
         .iter()
@@ -335,7 +341,7 @@ fn drawing() {
             if *f == Theme::LIGHT.background)
     });
     assert!(hollow);
-    let out = ascii::render(&c, &Options::default());
+    let out = ascii::render(&c, &Options::default()).unwrap();
     for want in ["◆", "◇", "△", "1", "many"] {
         assert!(out.contains(want), "{want}:\n{out}");
     }
@@ -368,7 +374,7 @@ fn floating_notes() {
     assert_eq!(n.shape, Shape::Note);
     assert_eq!(n.label.text, "on its own\nline two");
     assert!(n.sections.is_empty());
-    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT);
+    let s = scene::flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
     let fill = s.elements.iter().find_map(|e| match &e.primitive {
         Primitive::Path { fill, .. } if e.owner == scene::Owner::Node(1) => *fill,
         _ => None,
@@ -383,7 +389,8 @@ fn floating_notes() {
         &Options {
             charset: Charset::Unicode,
         },
-    );
+    )
+    .unwrap();
     assert!(text.contains("on its own") && text.contains('╮'), "{text}");
 }
 

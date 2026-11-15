@@ -118,7 +118,8 @@ impl<M: TextMetrics> Px<'_, M> {
                         words.push(Vec::new());
                     }
                     if !part.is_empty() {
-                        push_span(words.last_mut().expect("one word"), part, span);
+                        let last = words.len() - 1;
+                        push_span(&mut words[last], part, span);
                     }
                 }
             }
@@ -324,15 +325,19 @@ fn subgraph_title(s: &Subgraph) -> String {
 }
 
 /// Draws `chart`, measuring text with `metrics` (DISPLA-1).
-pub fn flowchart(chart: &Flowchart, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
+pub fn flowchart(
+    chart: &Flowchart,
+    metrics: &impl TextMetrics,
+    theme: &Theme,
+) -> crate::Result<Scene> {
     let px = Px { metrics, theme };
     let Some(c) = chart.collapsed() else {
-        let layout = layout::layout(&chart.layout_graph(&px), &CONFIG);
-        return draw(chart, &layout, metrics, theme).0;
+        let layout = layout::layout(&chart.layout_graph(&px)?, &CONFIG)?;
+        return Ok(draw(chart, &layout, metrics, theme)?.0);
     };
     // Collapsed subgraphs (FLOWMO-15): draw the folded chart, owned by the original's elements.
-    let layout = layout::layout(&c.chart.layout_graph(&px), &CONFIG);
-    let mut scene = draw(&c.chart, &layout, metrics, theme).0;
+    let layout = layout::layout(&c.chart.layout_graph(&px)?, &CONFIG)?;
+    let mut scene = draw(&c.chart, &layout, metrics, theme)?.0;
     for e in &mut scene.elements {
         e.owner = match e.owner {
             Owner::Node(i) => match c.nodes[i] {
@@ -344,7 +349,7 @@ pub fn flowchart(chart: &Flowchart, metrics: &impl TextMetrics, theme: &Theme) -
             Owner::Diagram => Owner::Diagram,
         };
     }
-    scene
+    Ok(scene)
 }
 
 /// Draws `chart` where `layout` placed it: node `i` at `layout.nodes[i]`, and so on, as
@@ -355,7 +360,7 @@ pub(super) fn draw(
     layout: &Layout,
     metrics: &impl TextMetrics,
     theme: &Theme,
-) -> (Scene, Pt) {
+) -> crate::Result<(Scene, Pt)> {
     let px = Px { metrics, theme };
     let title = chart
         .title
@@ -475,10 +480,11 @@ pub(super) fn draw(
     for (i, s) in chart.subgraphs.iter().enumerate().rev() {
         endpoints.insert(&s.id, Err(i));
     }
-    let boundary = |id: &str| -> Vec<Pt> {
-        match endpoints.get(id).expect("edge endpoint exists") {
-            Err(i) => shapes::flatten(&rect(at(layout.clusters[*i]))),
-            Ok(i) => outlines[*i].boundary.clone(),
+    let boundary = |id: &str| -> crate::Result<Vec<Pt>> {
+        match endpoints.get(id) {
+            Some(Err(i)) => Ok(shapes::flatten(&rect(at(layout.clusters[*i])))),
+            Some(Ok(i)) => Ok(outlines[*i].boundary.clone()),
+            None => Err(crate::Error::new(format!("unknown edge endpoint `{id}`"))),
         }
     };
     let edge_styles: Vec<Resolved> = chart
@@ -510,7 +516,7 @@ pub(super) fn draw(
             e,
             &edge_styles[i],
             points,
-            [&boundary(&e.from), &boundary(&e.to)],
+            [&boundary(&e.from)?, &boundary(&e.to)?],
             &mut reach,
         );
     }
@@ -636,7 +642,7 @@ pub(super) fn draw(
         "drew a {width}x{height} scene of {} elements",
         elements.len()
     );
-    (
+    Ok((
         Scene {
             width,
             height,
@@ -644,7 +650,7 @@ pub(super) fn draw(
             elements,
         },
         off,
-    )
+    ))
 }
 
 /// The box around what is drawn outside the layout's area.

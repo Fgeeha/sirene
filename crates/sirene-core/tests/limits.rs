@@ -14,9 +14,9 @@ const DEEP: usize = 20_000;
 /// it came, in order of first appearance.
 fn draw(src: &str) -> Vec<(String, usize)> {
     let l = diagram::lower(src);
-    let s = l.diagram.scene(&Approx, &Theme::LIGHT);
+    let s = l.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
     assert!(s.width.is_finite() && s.height.is_finite());
-    let text = l.diagram.ascii(&Options::default());
+    let text = l.diagram.ascii(&Options::default()).unwrap();
     assert!(text.is_empty() || text.ends_with('\n'));
     let mut out: Vec<(String, usize)> = Vec::new();
     for d in l.diagnostics {

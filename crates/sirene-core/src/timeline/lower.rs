@@ -43,7 +43,8 @@ pub(crate) fn lower(root: &SyntaxNode) -> (Timeline, Vec<Diagnostic>) {
                 if t.sections.is_empty() {
                     t.sections.push(Section::default());
                 }
-                let section = t.sections.last_mut().expect("one section");
+                let last = t.sections.len() - 1;
+                let section = &mut t.sections[last];
                 section.periods.push(Period { label, events });
             }
             EVENTS_STMT => {

@@ -62,12 +62,17 @@ fn snapshots() {
             }
             let mut out = diagnostics(&src, &lowered);
             out.push('\n');
-            out.push_str(&lowered.diagram.ascii(&Options {
-                charset: Charset::Unicode,
-            }));
+            out.push_str(
+                &lowered
+                    .diagram
+                    .ascii(&Options {
+                        charset: Charset::Unicode,
+                    })
+                    .unwrap(),
+            );
             insta::assert_snapshot!(format!("{dir}__{name}"), out, &src);
             for theme in [Theme::LIGHT, Theme::DARK] {
-                let s = lowered.diagram.scene(&Approx, &theme);
+                let s = lowered.diagram.scene(&Approx, &theme).unwrap();
                 assert!(!s.elements.is_empty(), "{name}");
                 assert!(s.elements.iter().all(|e| e.owner == Owner::Diagram));
             }
@@ -78,9 +83,12 @@ fn snapshots() {
 #[test]
 fn ascii_charset_snapshots() {
     for (name, src) in fixtures("valid") {
-        let out = diagram::lower(&src).diagram.ascii(&Options {
-            charset: Charset::Ascii,
-        });
+        let out = diagram::lower(&src)
+            .diagram
+            .ascii(&Options {
+                charset: Charset::Ascii,
+            })
+            .unwrap();
         insta::assert_snapshot!(format!("ascii__{name}"), out, &src);
     }
 }
@@ -292,7 +300,7 @@ fn drawing() {
     let src = "gitGraph\n  commit id: \"a\"\n  branch dev\n  commit id: \"b\" tag: \"v1\"\n  \
                checkout main\n  merge dev\n";
     let lowered = diagram::lower(src);
-    let s = lowered.diagram.scene(&Approx, &Theme::LIGHT);
+    let s = lowered.diagram.scene(&Approx, &Theme::LIGHT).unwrap();
     let text_at = |want: &str| {
         s.elements
             .iter()
@@ -309,7 +317,7 @@ fn drawing() {
     assert!(text_at("v1").y < b.y, "tags above, ids below");
     // Top to bottom puts lanes left to right and commits down.
     let tb = diagram::lower(&src.replace("gitGraph", "gitGraph TB:")).diagram;
-    let s = tb.scene(&Approx, &Theme::LIGHT);
+    let s = tb.scene(&Approx, &Theme::LIGHT).unwrap();
     let at = |want: &str| {
         s.elements
             .iter()
@@ -323,7 +331,7 @@ fn drawing() {
     assert!(at("a").y < at("b").y);
     // Bottom to top mirrors it: later commits are higher.
     let bt = diagram::lower(&src.replace("gitGraph", "gitGraph BT:")).diagram;
-    let s = bt.scene(&Approx, &Theme::LIGHT);
+    let s = bt.scene(&Approx, &Theme::LIGHT).unwrap();
     let pos = |want: &str| {
         s.elements
             .iter()
@@ -336,8 +344,8 @@ fn drawing() {
     assert!(pos("a").y > pos("b").y);
     assert!(pos("main").y > pos("a").y, "branch names below");
     // ASCII flips rows for bottom to top.
-    let down = tb.ascii(&Options::default());
-    let up = bt.ascii(&Options::default());
+    let down = tb.ascii(&Options::default()).unwrap();
+    let up = bt.ascii(&Options::default()).unwrap();
     let lines = |s: &str| s.lines().map(str::to_owned).collect::<Vec<_>>();
     assert_eq!(lines(&down)[0], "main");
     assert_eq!(lines(&up).last().map(String::as_str), Some("main"));

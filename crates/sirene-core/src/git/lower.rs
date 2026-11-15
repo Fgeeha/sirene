@@ -280,7 +280,10 @@ impl Lowerer {
             self.error(at, message);
             return;
         }
-        let head = self.branches[other].head.expect("checked above");
+        let Some(head) = self.branches[other].head else {
+            self.error(at, "the merged branch has no head");
+            return;
+        };
         self.commit(attrs, vec![head], None, range);
     }
 

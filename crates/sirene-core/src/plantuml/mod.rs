@@ -172,6 +172,13 @@ impl Parse {
 
 /// Parses PlantUML source. Never fails; problems are reported as diagnostics.
 pub fn parse(src: &str) -> Parse {
+    if let Some((green, diagnostics)) = crate::lines::oversized(src) {
+        return Parse {
+            green,
+            diagnostics,
+            kind: Kind::Sequence,
+        };
+    }
     // A lone `\r` is a line break; offsets are unchanged.
     let src = crate::lines::lone_cr_as_lf(src);
     let kind = kind(&src);

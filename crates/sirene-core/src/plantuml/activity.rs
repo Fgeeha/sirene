@@ -513,7 +513,10 @@ impl Lower {
         if !color.is_empty() {
             match lines::color(color) {
                 Some(c) => {
-                    let node = self.chart.nodes.last_mut().expect("just added");
+                    let Some(node) = self.chart.nodes.last_mut() else {
+                        self.error(range, "cannot apply a color without an activity node");
+                        return None;
+                    };
                     node.styles.push(Style {
                         property: "fill".into(),
                         value: c,
@@ -531,7 +534,9 @@ impl Lower {
     /// `-> text;` or `-[#color,dashed]->`: the label and style of the next edges.
     fn arrow(&mut self, line: &Line) {
         let t = line.text.as_str();
-        let head = t.find('>').expect("checked");
+        let Some(head) = t.find('>') else {
+            return self.error(line.range, "expected `>` in an arrow statement");
+        };
         let shaft = &t[..head];
         let mut arrow = Arrow::default();
         if let (Some(open), Some(close)) = (shaft.find('['), shaft.rfind(']'))
@@ -719,7 +724,7 @@ impl Lower {
         };
         self.bake();
         let Some(Open::If { decision, ends, .. }) = self.stack.last_mut() else {
-            unreachable!()
+            return self.error(line.range, "`elseif` belongs in an `if`");
         };
         ends.append(&mut self.tails);
         let from = decision.clone();
@@ -777,7 +782,7 @@ impl Lower {
             ..
         }) = self.stack.pop()
         else {
-            unreachable!()
+            return self.error(line.range, "`endif` without an `if` to close");
         };
         ends.append(&mut self.tails);
         if !otherwise {
@@ -837,7 +842,7 @@ impl Lower {
             ..
         }) = self.stack.pop()
         else {
-            unreachable!()
+            return self.error(line.range, "`endswitch` without a `switch` to close");
         };
         ends.append(&mut self.tails);
         if cases == 0 {
@@ -874,7 +879,7 @@ impl Lower {
             ..
         }) = self.stack.pop()
         else {
-            unreachable!()
+            return self.error(line.range, "`endwhile` without a `while` to close");
         };
         // Back to the test.
         self.join(&decision, line.range);
@@ -943,10 +948,12 @@ impl Lower {
             ..
         }) = self.stack.pop()
         else {
-            unreachable!()
+            return self.error(line.range, "`repeat while` without a `repeat` to close");
         };
         let t = line.text.as_str();
-        let at = t.to_ascii_lowercase().find("while").expect("checked") + 5;
+        let Some(at) = t.to_ascii_lowercase().find("while").map(|at| at + 5) else {
+            return self.error(line.range, "expected `while` after `repeat`");
+        };
         let rest = t[at..].trim_start();
         let (cond, rest) = parens(rest).unwrap_or(("", rest));
         let (yes, rest) = label_after(rest, "is");
@@ -1028,7 +1035,10 @@ impl Lower {
         }
         self.bake();
         let Some(Open::Fork { bar, mut ends, .. }) = self.stack.pop() else {
-            unreachable!()
+            return self.error(
+                line.range,
+                format!("`{used}` without a `{opener}` to close"),
+            );
         };
         ends.append(&mut self.tails);
         dedupe(&mut ends);

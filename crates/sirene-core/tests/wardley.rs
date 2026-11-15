@@ -41,7 +41,7 @@ fn snapshots() {
             lowered.diagnostics
         );
         for charset in [Charset::Unicode, Charset::Ascii] {
-            let out = lowered.diagram.ascii(&Options { charset });
+            let out = lowered.diagram.ascii(&Options { charset }).unwrap();
             let kind = match charset {
                 Charset::Unicode => "valid",
                 Charset::Ascii => "ascii",
@@ -49,7 +49,7 @@ fn snapshots() {
             insta::assert_snapshot!(format!("{kind}__{name}"), out, &src);
         }
         for theme in [Theme::LIGHT, Theme::DARK] {
-            let s = lowered.diagram.scene(&Approx, &theme);
+            let s = lowered.diagram.scene(&Approx, &theme).unwrap();
             assert!(!s.elements.is_empty(), "{name}");
         }
     }
@@ -199,7 +199,7 @@ fn problems() {
         ]
     );
     let l = diagram::lower("wardley-beta\nevolution A@0.1 -> B@99999999999\n");
-    l.diagram.ascii(&Default::default());
+    l.diagram.ascii(&Default::default()).unwrap();
     let Diagram::Wardley(w) = l.diagram else {
         panic!("not a Wardley map");
     };
@@ -221,7 +221,8 @@ fn problems() {
 fn drawing() {
     let s = diagram::lower("wardley-beta\ntitle T\ncomponent A [0.5, 0.25]\n")
         .diagram
-        .scene(&Approx, &Theme::LIGHT);
+        .scene(&Approx, &Theme::LIGHT)
+        .unwrap();
     assert_eq!((s.width, s.height), (900.0, 600.0));
     let texts: Vec<&str> = s
         .elements

@@ -227,3 +227,33 @@ fn settings_stay_in_memory_without_a_file(cx: &mut TestAppContext) {
     assert_eq!(s.appearance, Appearance::Dark);
     assert!(s.file.is_none());
 }
+
+/// ERRORH-5: persistence failures remain observable with logging disabled.
+#[gpui::test]
+fn persistence_errors_are_retained_and_clear_after_success(cx: &mut TestAppContext) {
+    use std::error::Error as _;
+    let dir = tempfile::tempdir().unwrap();
+    let obstruction = dir.path().join("not-a-directory");
+    std::fs::write(&obstruction, b"keep").unwrap();
+    cx.update(|cx| {
+        cx.set_global(Settings {
+            file: Some(obstruction.join("settings")),
+            ..Settings::default()
+        });
+        settings::update(cx, |s| s.appearance = Appearance::Dark);
+        let error = settings::last_error(cx).expect("persistence failure retained");
+        assert!(error.report().contains("cannot write settings"));
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .is_some()
+        );
+        assert_eq!(settings::get(cx).appearance, Appearance::Dark);
+        cx.set_global(Settings::load(dir.path().join("settings")));
+        settings::save(cx);
+        assert!(settings::last_error(cx).is_none());
+    });
+    assert_eq!(std::fs::read(&obstruction).unwrap(), b"keep");
+}

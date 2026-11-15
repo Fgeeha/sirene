@@ -38,13 +38,18 @@ fn examples_render_cleanly() {
             lowered.diagnostics
         );
         for theme in [Theme::LIGHT, Theme::DARK] {
-            let s = lowered.diagram.scene(&FontMetrics, &theme);
+            let s = lowered.diagram.scene(&FontMetrics, &theme).unwrap();
             assert!(svg::write(&s).starts_with("<svg"), "{}", path.display());
             png::write(&s, png::Options::new(png::Quality::Normal))
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         }
         assert!(
-            !lowered.diagram.ascii(&Options::default()).trim().is_empty(),
+            !lowered
+                .diagram
+                .ascii(&Options::default())
+                .unwrap()
+                .trim()
+                .is_empty(),
             "{}",
             path.display()
         );

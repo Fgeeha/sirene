@@ -5,7 +5,9 @@
 //! version decision, package-manager refusals, the prompt, and the signing key. The decisions
 //! are pure functions, tested without the network.
 
-use std::io::{IsTerminal, Write};
+use sirene_core::{Error, Result};
+use std::fmt;
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -68,9 +70,11 @@ pub enum Decision {
 }
 
 /// Compares `current` and `target` by semver precedence.
-pub fn decide(current: &str, target: &str) -> Result<Decision, String> {
-    let parse =
-        |v: &str| semver::Version::parse(v).map_err(|e| format!("'{v}' is not a version: {e}"));
+pub fn decide(current: &str, target: &str) -> Result<Decision> {
+    let parse = |v: &str| {
+        semver::Version::parse(v)
+            .map_err(|e| Error::with_source(format!("'{v}' is not a version"), e))
+    };
     let (current, target) = (parse(current)?, parse(target)?);
     Ok(match target.cmp_precedence(&current) {
         std::cmp::Ordering::Equal => Decision::UpToDate,
@@ -81,16 +85,19 @@ pub fn decide(current: &str, target: &str) -> Result<Decision, String> {
 
 /// A `--to` value without its one leading `v`, if it is a plain version (UPDATE-6). It is
 /// interpolated into a request path, so nothing that could leave a path segment gets through.
-pub fn version_arg(raw: &str) -> Result<String, String> {
+pub fn version_arg(raw: &str) -> Result<String> {
     let v = raw.strip_prefix('v').unwrap_or(raw);
     let plain = !v.is_empty()
         && v.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
-    if plain && semver::Version::parse(v).is_ok() {
-        Ok(v.to_owned())
-    } else {
-        Err(format!("--to '{raw}' is not a version like 0.2.0"))
+    if !plain {
+        return Err(Error::new(format!(
+            "--to '{raw}' is not a version like 0.2.0"
+        )));
     }
+    semver::Version::parse(v)
+        .map_err(|e| Error::with_source(format!("--to '{raw}' is not a version like 0.2.0"), e))?;
+    Ok(v.to_owned())
 }
 
 /// A package manager that installed the running binary (UPDATE-4).
@@ -148,7 +155,7 @@ fn updater(
     target: &str,
     version: Option<&str>,
     timeout: Duration,
-) -> Result<github::Update, self_update::Error> {
+) -> std::result::Result<github::Update, self_update::Error> {
     let mut b = github::Update::configure();
     b.repo_owner(OWNER)
         .repo_name(NAME)
@@ -170,119 +177,240 @@ fn updater(
 }
 
 /// The latest release's version.
-fn latest(target: &str) -> Result<String, String> {
-    let up = updater(target, None, LOOKUP).map_err(|e| e.to_string())?;
-    let releases = up.get_latest_release().map_err(|e| e.to_string())?;
+fn latest(target: &str) -> Result<String> {
+    let up = updater(target, None, LOOKUP)
+        .map_err(|e| Error::with_source("cannot configure release lookup", e))?;
+    let releases = up
+        .get_latest_release()
+        .map_err(|e| Error::with_source("cannot fetch releases", e))?;
     let release = releases.latest().ok_or("the release listing is empty")?;
     Ok(release.version().trim_start_matches('v').to_owned())
 }
 
-/// Asks `question [y/N]` on the terminal.
-fn confirm(question: &str) -> bool {
-    print!("{question} [y/N] ");
-    let _ = std::io::stdout().flush();
+/// Asks `question [y/N]`, preserving prompt, flush, read, and EOF failures.
+fn confirm(question: &str, input: &mut impl BufRead, out: &mut impl Write) -> Result<bool> {
+    write!(out, "{question} [y/N] ")
+        .and_then(|()| out.flush())
+        .map_err(|e| Error::with_source("cannot write update confirmation", e))?;
     let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).is_ok()
-        && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    let read = input
+        .read_line(&mut answer)
+        .map_err(|e| Error::with_source("cannot read update confirmation", e))?;
+    if read == 0 {
+        return Err(Error::with_source(
+            "cannot read update confirmation",
+            std::io::Error::from(std::io::ErrorKind::UnexpectedEof),
+        ));
+    }
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
-fn fail(message: impl std::fmt::Display) -> ExitCode {
-    eprintln!("error: {message}");
-    ExitCode::FAILURE
+fn say(out: &mut impl Write, args: fmt::Arguments<'_>) -> Result<()> {
+    crate::output::line(out, args).map_err(|e| Error::with_source("cannot write <stdout>", e))
 }
 
 pub fn run(args: Args) -> ExitCode {
+    match run_update(args, &mut std::io::stdout().lock()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            diagnostic!("error: {}", e.report());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_update(args: Args, out: &mut impl Write) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
-    let Some(triple) = this_target() else {
-        return fail(format!(
+    let triple = this_target().ok_or_else(|| {
+        Error::new(format!(
             "no release is built for {} {}; build from source with `cargo install sirene`",
             std::env::consts::OS,
-            std::env::consts::ARCH
-        ));
-    };
-    let pinned = match args.to.as_deref().map(version_arg).transpose() {
-        Ok(v) => v,
-        Err(e) => return fail(e),
-    };
-    let exe = std::env::current_exe().and_then(|e| e.canonicalize());
-    let owner = exe
-        .as_ref()
-        .ok()
-        .and_then(|e| owner(e, cargo_home().as_deref()));
+            std::env::consts::ARCH,
+        ))
+    })?;
+    let pinned = args.to.as_deref().map(version_arg).transpose()?;
+    let exe = std::env::current_exe()
+        .and_then(|e| e.canonicalize())
+        .map_err(|e| Error::with_source("cannot locate the running executable", e))?;
+    let owner = owner(&exe, cargo_home().as_deref());
     if let (Some(owner), false) = (owner, args.check) {
-        return fail(format!(
+        return Err(Error::new(format!(
             "this sirene was installed by a package manager; update it with `{}`",
             owner.command()
-        ));
+        )));
     }
     let explicit = pinned.is_some();
     let version = match pinned {
         Some(v) => v,
         None => {
             log::debug!("looking up the latest release");
-            match latest(&triple) {
-                Ok(v) => v,
-                Err(e) => return fail(format!("could not look up the latest release: {e}")),
-            }
+            latest(&triple).map_err(|e| e.context("could not look up the latest release"))?
         }
     };
-    let decision = match decide(current, &version) {
-        Ok(d) => d,
-        Err(e) => return fail(e),
-    };
-    let note = || {
+    let decision = decide(current, &version)?;
+    log::debug!("update decision for {current} -> {version}: {decision:?}");
+    let note = |out: &mut _| {
         if let Some(owner) = owner {
-            println!("note: update this sirene with `{}`", owner.command());
+            say(
+                out,
+                format_args!("note: update this sirene with `{}`", owner.command()),
+            )?;
         }
+        Ok(())
     };
     match decision {
         Decision::UpToDate => {
-            println!("sirene {current} is up to date (target {triple})");
-            note();
-            return ExitCode::SUCCESS;
+            say(
+                out,
+                format_args!("sirene {current} is up to date (target {triple})"),
+            )?;
+            return note(out);
         }
         Decision::Older if explicit => {
-            return fail(format!(
+            return Err(Error::new(format!(
                 "sirene {current} is newer than {version}; not downgrading (target {triple})"
-            ));
+            )));
         }
         Decision::Older => {
-            println!(
-                "sirene {current} is newer than the latest release, {version} (target {triple})"
-            );
-            note();
-            return ExitCode::SUCCESS;
+            say(
+                out,
+                format_args!(
+                    "sirene {current} is newer than the latest release, {version} (target {triple})"
+                ),
+            )?;
+            return note(out);
         }
         Decision::Update if args.check => {
-            println!("update available: {current} -> {version} (target {triple})");
-            note();
-            return ExitCode::SUCCESS;
+            say(
+                out,
+                format_args!("update available: {current} -> {version} (target {triple})"),
+            )?;
+            return note(out);
         }
         Decision::Update => {}
     }
     if !args.yes {
         if !std::io::stdin().is_terminal() {
-            return fail("not a terminal; pass --yes to update without asking");
+            return Err(Error::new(
+                "not a terminal; pass --yes to update without asking",
+            ));
         }
-        if !confirm(&format!("update sirene {current} -> {version}?")) {
-            println!("not updated");
-            return ExitCode::SUCCESS;
+        if !confirm(
+            &format!("update sirene {current} -> {version}?"),
+            &mut std::io::stdin().lock(),
+            out,
+        )? {
+            log::debug!("update cancelled");
+            say(out, format_args!("not updated"))?;
+            return Ok(());
         }
     }
-    println!("downloading sirene {version} ({triple})");
-    let swapped = updater(&triple, Some(&version), DOWNLOAD).and_then(|u| u.update());
-    match swapped {
-        Ok(_) => {
-            println!("updated sirene {current} -> {version}");
-            ExitCode::SUCCESS
-        }
-        Err(e) => fail(format!("update failed; sirene is unchanged: {e}")),
-    }
+    say(out, format_args!("downloading sirene {version} ({triple})"))?;
+    let start = std::time::Instant::now();
+    updater(&triple, Some(&version), DOWNLOAD)
+        .and_then(|u| u.update())
+        .map_err(|e| Error::with_source("update failed; sirene is unchanged", e))?;
+    log::debug!("installed sirene {version} in {:.1?}", start.elapsed());
+    say(out, format_args!("updated sirene {current} -> {version}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ERRORH-5: cancellation, EOF, read errors, and prompt failures are distinct.
+    #[test]
+    fn confirmation_preserves_io_failures() {
+        use std::error::Error as _;
+        use std::io::Cursor;
+
+        let mut out = Vec::new();
+        assert!(confirm("update?", &mut Cursor::new(b"YES\n"), &mut out).unwrap());
+        assert_eq!(out, b"update? [y/N] ");
+        assert!(!confirm("update?", &mut Cursor::new(b"no\n"), &mut out).unwrap());
+        assert!(!confirm("update?", &mut Cursor::new(b"\n"), &mut out).unwrap());
+        let error = confirm("update?", &mut Cursor::new(b""), &mut out).unwrap_err();
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::UnexpectedEof
+        );
+
+        struct FailedIo {
+            flush: bool,
+        }
+        impl Write for FailedIo {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.flush {
+                    Ok(bytes.len())
+                } else {
+                    Err(std::io::ErrorKind::BrokenPipe.into())
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        impl std::io::Read for FailedIo {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+        }
+        impl BufRead for FailedIo {
+            fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+            fn consume(&mut self, _: usize) {}
+        }
+        for flush in [false, true] {
+            let error = confirm(
+                "update?",
+                &mut Cursor::new(b"yes\n"),
+                &mut FailedIo { flush },
+            )
+            .unwrap_err();
+            assert_eq!(
+                error
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+            let error = say(&mut FailedIo { flush }, format_args!("status")).unwrap_err();
+            assert_eq!(
+                error
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+        }
+        let error = confirm("update?", &mut FailedIo { flush: false }, &mut out).unwrap_err();
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let error = decide("bad", "1.0.0").unwrap_err();
+        assert!(error.source().unwrap().is::<semver::Error>());
+        let error = version_arg("0.2").unwrap_err();
+        assert!(error.source().unwrap().is::<semver::Error>());
+    }
 
     #[test]
     fn targets() {
@@ -305,24 +433,27 @@ mod tests {
 
     #[test]
     fn decisions() {
-        assert_eq!(decide("0.2.0", "0.2.0"), Ok(Decision::UpToDate));
-        assert_eq!(decide("0.2.0", "0.3.0"), Ok(Decision::Update));
-        assert_eq!(decide("0.2.0", "0.1.1"), Ok(Decision::Older));
+        assert_eq!(decide("0.2.0", "0.2.0").unwrap(), Decision::UpToDate);
+        assert_eq!(decide("0.2.0", "0.3.0").unwrap(), Decision::Update);
+        assert_eq!(decide("0.2.0", "0.1.1").unwrap(), Decision::Older);
         // A dev build of the next version is newer than the release before it, older than its
         // own release.
-        assert_eq!(decide("0.2.1-dev", "0.2.0"), Ok(Decision::Older));
-        assert_eq!(decide("0.2.1-dev", "0.2.1"), Ok(Decision::Update));
+        assert_eq!(decide("0.2.1-dev", "0.2.0").unwrap(), Decision::Older);
+        assert_eq!(decide("0.2.1-dev", "0.2.1").unwrap(), Decision::Update);
         assert!(decide("0.2.0", "latest").is_err());
         // Build metadata does not affect precedence.
-        assert_eq!(decide("0.2.0+a", "0.2.0+b"), Ok(Decision::UpToDate));
-        assert_eq!(decide("0.2.0", "0.2.0+build.5"), Ok(Decision::UpToDate));
+        assert_eq!(decide("0.2.0+a", "0.2.0+b").unwrap(), Decision::UpToDate);
+        assert_eq!(
+            decide("0.2.0", "0.2.0+build.5").unwrap(),
+            Decision::UpToDate
+        );
     }
 
     #[test]
     fn versions() {
-        assert_eq!(version_arg("0.2.0").as_deref(), Ok("0.2.0"));
-        assert_eq!(version_arg("v0.2.0").as_deref(), Ok("0.2.0"));
-        assert_eq!(version_arg("1.0.0-rc.1").as_deref(), Ok("1.0.0-rc.1"));
+        assert_eq!(version_arg("0.2.0").unwrap(), "0.2.0");
+        assert_eq!(version_arg("v0.2.0").unwrap(), "0.2.0");
+        assert_eq!(version_arg("1.0.0-rc.1").unwrap(), "1.0.0-rc.1");
         for bad in [
             "",
             "v",

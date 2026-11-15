@@ -2,7 +2,157 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 fn sirene() -> Command {
-    Command::cargo_bin("sirene").expect("sirene binary is built")
+    let mut command = Command::cargo_bin("sirene").expect("sirene binary is built");
+    command.env_remove("SIRENE_LOG").env_remove("RUST_LOG");
+    command
+}
+
+/// ERRORH-6/7: filters are configurable without altering the rendered output.
+#[test]
+fn logging_environment_and_verbose_precedence() {
+    let source = "flowchart TD\nA --> B\n";
+    sirene()
+        .arg("ascii")
+        .env("SIRENE_LOG", "debug")
+        .write_stdin(source)
+        .assert()
+        .success()
+        .stdout(AB)
+        .stderr(predicate::str::contains("DEBUG sirene: sirene "));
+    sirene()
+        .arg("ascii")
+        .env("RUST_LOG", "sirene=debug")
+        .write_stdin(source)
+        .assert()
+        .success()
+        .stdout(AB)
+        .stderr(predicate::str::contains("reading <stdin>"));
+    for quiet in ["", "off"] {
+        sirene()
+            .arg("ascii")
+            .env("SIRENE_LOG", quiet)
+            .env("RUST_LOG", "trace")
+            .write_stdin(source)
+            .assert()
+            .success()
+            .stdout(AB)
+            .stderr("");
+    }
+    sirene()
+        .args(["-v", "ascii"])
+        .env("SIRENE_LOG", "off,sirene_core=off")
+        .write_stdin(source)
+        .assert()
+        .success()
+        .stdout(AB)
+        .stderr(predicate::str::contains("reading <stdin>"))
+        .stderr(predicate::str::contains("sirene_core").not());
+    sirene()
+        .args(["ascii", "-vv"])
+        .write_stdin(source)
+        .assert()
+        .success()
+        .stdout(AB)
+        .stderr(predicate::str::contains("TRACE sirene: lowering"));
+    sirene()
+        .arg("ascii")
+        .env("SIRENE_LOG", "off,sirene_core::flowchart=debug")
+        .write_stdin(source)
+        .assert()
+        .success()
+        .stdout(AB)
+        .stderr(predicate::str::contains("sirene_core::flowchart: parsed"))
+        .stderr(predicate::str::contains("reading <stdin>").not());
+}
+
+#[test]
+fn logging_rejects_invalid_configuration_without_echoing_it() {
+    sirene()
+        .arg("ascii")
+        .env("SIRENE_LOG", "sirene=secret-value")
+        .write_stdin("flowchart\nA\n")
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(predicate::str::contains("invalid log level"))
+        .stderr(predicate::str::contains("secret-value").not());
+}
+
+/// ERRORH-4: an unreadable entry fails a directory command while readable diagrams proceed.
+#[cfg(unix)]
+#[test]
+fn directory_entry_failures_fail_checks_and_batch_conversion() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let good = dir.path().join("ok.mmd");
+    let broken = dir.path().join("broken.mmd");
+    std::fs::write(&good, "flowchart\nA\n").unwrap();
+    symlink(dir.path().join("missing.mmd"), &broken).unwrap();
+    // Hidden entries are intentionally excluded, including inaccessible symlink targets.
+    symlink(
+        dir.path().join("missing.mmd"),
+        dir.path().join(".hidden.mmd"),
+    )
+    .unwrap();
+    for command in ["check", "svg", "png"] {
+        sirene()
+            .arg(command)
+            .arg(dir.path())
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(format!(
+                "cannot inspect {}",
+                broken.display()
+            )))
+            .stderr(predicate::str::contains(".hidden.mmd").not());
+    }
+    assert!(good.with_extension("svg").is_file());
+    assert!(good.with_extension("png").is_file());
+}
+
+/// ERRORH-3: OS write errors produce failure rather than a panic exit.
+#[cfg(target_os = "linux")]
+#[test]
+fn failing_terminal_streams_do_not_panic() {
+    use std::process::{Command as Process, Stdio};
+
+    let binary = assert_cmd::cargo::cargo_bin!("sirene");
+    let current = env!("CARGO_PKG_VERSION");
+    let output = Process::new(binary)
+        .args(["update", "--check", "--to", current])
+        .env_remove("SIRENE_LOG")
+        .env_remove("RUST_LOG")
+        .stdout(
+            std::fs::File::options()
+                .write(true)
+                .open("/dev/full")
+                .unwrap(),
+        )
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot write <stdout>"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let empty = dir.path().join("empty.md");
+    std::fs::write(&empty, "# No diagrams\n").unwrap();
+    let output = Process::new(binary)
+        .arg("check")
+        .arg(empty)
+        .env_remove("SIRENE_LOG")
+        .env_remove("RUST_LOG")
+        .stderr(
+            std::fs::File::options()
+                .write(true)
+                .open("/dev/full")
+                .unwrap(),
+        )
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
 }
 
 #[test]
@@ -207,7 +357,7 @@ fn ascii_read_failures() {
         .assert()
         .code(1)
         .stderr(
-            "error: cannot read <stdin>: the text is not UTF-8 (an invalid byte at offset 3)\n",
+            "error: cannot read <stdin>: the text is not UTF-8 (an invalid byte at offset 3): incomplete utf-8 byte sequence from index 3\n",
         );
 }
 

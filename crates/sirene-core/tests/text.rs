@@ -28,7 +28,7 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
 fn drawn(src: &str, lang: Option<Lang>) -> (String, Vec<String>) {
     let l = diagram::lower_as(src, lang);
     let messages = l.diagnostics.iter().map(|d| d.message.clone()).collect();
-    (l.diagram.ascii(&Options::default()), messages)
+    (l.diagram.ascii(&Options::default()).unwrap(), messages)
 }
 
 fn fixtures() -> Vec<(PathBuf, String)> {

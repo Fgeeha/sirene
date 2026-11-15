@@ -213,8 +213,9 @@ fn arrow_at(line: &str, dash: usize) -> Option<(usize, usize)> {
 impl Parser<'_> {
     fn warn(&mut self, start: usize, end: usize, message: impl Into<String>) {
         let range = TextRange::new(
-            TextSize::try_from(start).expect("source fits"),
-            TextSize::try_from(end).expect("source fits"),
+            // Base rejects sources beyond the CST's representable byte limit.
+            TextSize::new(start as u32),
+            TextSize::new(end as u32),
         );
         self.diagnostics.push(Diagnostic::warning(range, message));
     }

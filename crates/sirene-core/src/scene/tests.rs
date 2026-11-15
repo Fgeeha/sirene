@@ -6,7 +6,7 @@ fn chart(src: &str) -> Flowchart {
 }
 
 fn draw(src: &str) -> Scene {
-    flowchart(&chart(src), &Approx, &Theme::LIGHT)
+    flowchart(&chart(src), &Approx, &Theme::LIGHT).unwrap()
 }
 
 fn owned(s: &Scene, owner: Owner) -> Vec<&Primitive> {
@@ -57,7 +57,7 @@ fn empty_diagram() {
     assert!(s.elements.is_empty());
     assert_eq!((s.width, s.height), (32.0, 32.0));
     assert_eq!(s.background, Theme::LIGHT.background);
-    let s = flowchart(&chart("flowchart\n"), &Approx, &Theme::DARK);
+    let s = flowchart(&chart("flowchart\n"), &Approx, &Theme::DARK).unwrap();
     assert_eq!(s.background, Theme::DARK.background);
     assert_eq!(Theme::default(), Theme::LIGHT);
 }
@@ -94,7 +94,7 @@ fn title_stays_centered_when_the_scene_grows() {
     c.edges[0].end_label = Some(crate::flowchart::Label::plain(
         "a very long label at the head end of the edge",
     ));
-    let s = flowchart(&c, &Approx, &Theme::LIGHT);
+    let s = flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
     let Some(Primitive::Text { center, .. }) = owned(&s, Owner::Diagram).first().copied() else {
         panic!("no title")
     };
@@ -110,7 +110,7 @@ fn edges_end_on_every_outline() {
                 "flowchart {dir}\nX --> A\nY --> A\nZ --> A\nA --> W\n"
             ));
             c.nodes[1].shape = shape;
-            let s = flowchart(&c, &Approx, &Theme::LIGHT);
+            let s = flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
             let node = owned(&s, Owner::Node(1));
             // Every stroke counts: a person's head is drawn apart from its body.
             let outlines: Vec<Vec<Pt>> = node
@@ -164,12 +164,12 @@ fn shapes_without_labels() {
     ] {
         let mut c = chart("flowchart\nA[hidden]\n");
         c.nodes[0].shape = shape;
-        let s = flowchart(&c, &Approx, &Theme::LIGHT);
+        let s = flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
         assert!(texts(&s).is_empty(), "{shape:?}");
     }
     let mut c = chart("flowchart\nA[shown]\n");
     c.nodes[0].shape = Shape::Text;
-    let s = flowchart(&c, &Approx, &Theme::LIGHT);
+    let s = flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
     assert_eq!(texts(&s), ["shown"]);
 }
 
@@ -292,7 +292,7 @@ fn label_colors_follow_the_fill() {
                subgraph S [Group]\nF\nend\n\
                style S fill:#fdf2e3\n";
     let color_of = |theme: &Theme, wanted: &str| {
-        let s = flowchart(&chart(src), &Approx, theme);
+        let s = flowchart(&chart(src), &Approx, theme).unwrap();
         s.elements
             .iter()
             .find_map(|e| match &e.primitive {
@@ -323,7 +323,7 @@ fn chains_draw_straight() {
                diamond{Diamond} --> hex{{Hexagon}} --> leanR[/Lean right/] --> leanL[\\Lean left\\]\n\
                trap[/Trapezoid\\] --> inv[\\Inverted trapezoid/] --> ellipse(-Ellipse-) --> bare\n";
     for metrics in [&Approx as &dyn TextMetrics, &png::FontMetrics] {
-        let s = flowchart(&chart(src), &Dyn(metrics), &Theme::LIGHT);
+        let s = flowchart(&chart(src), &Dyn(metrics), &Theme::LIGHT).unwrap();
         for e in 0..12 {
             let line = owned(&s, Owner::Edge(e))
                 .into_iter()
@@ -361,7 +361,7 @@ fn arrowheads_sit_on_straight_runs() {
     for src in sources {
         for metrics in [&Approx as &dyn TextMetrics, &png::FontMetrics] {
             let c = chart(src);
-            let s = flowchart(&c, &Dyn(metrics), &Theme::LIGHT);
+            let s = flowchart(&c, &Dyn(metrics), &Theme::LIGHT).unwrap();
             for (i, e) in c.edges.iter().enumerate() {
                 if e.end != Some(flowchart::Arrow::Point) {
                     continue;
@@ -445,7 +445,8 @@ fn markdown_runs() {
         &chart("flowchart\nA[\"`a **bold** and _it_ end`\"]\n"),
         &png::FontMetrics,
         &Theme::LIGHT,
-    );
+    )
+    .unwrap();
     let r = runs(&s, Owner::Node(0));
     let texts: Vec<(&str, bool, bool)> = r
         .iter()
@@ -493,7 +494,7 @@ fn long_labels_wrap() {
         )),
         &png::FontMetrics,
         &Theme::LIGHT,
-    );
+    ).unwrap();
     let lines = |owner| {
         let mut ys: Vec<i32> = runs(&s, owner).iter().map(|r| r.1.y as i32).collect();
         ys.dedup();
@@ -598,10 +599,10 @@ fn extent(s: &Scene) -> (Pt, Pt) {
 fn end_labels_stay_inside() {
     for dir in ["TD", "LR", "BT", "RL"] {
         let mut c = chart(&format!("flowchart {dir}\nA --> B\n"));
-        let plain = flowchart(&c, &Approx, &Theme::LIGHT);
+        let plain = flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
         c.edges[0].start_label = Some(flowchart::Label::plain("a label at the tail"));
         c.edges[0].end_label = Some(flowchart::Label::plain("one\nat\nthe\nhead"));
-        let s = flowchart(&c, &Approx, &Theme::LIGHT);
+        let s = flowchart(&c, &Approx, &Theme::LIGHT).unwrap();
         assert!(texts(&s).contains(&"a label at the tail"), "{dir}");
         assert!(s.width > plain.width || s.height > plain.height, "{dir}");
         let (lo, hi) = extent(&s);

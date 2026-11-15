@@ -7,11 +7,11 @@ use sirene_core::scene::{self, Approx, Color, Scene, TextMetrics, Theme};
 
 fn scene_of(src: &str, theme: &Theme) -> Scene {
     let chart = flowchart::parse(src).lower().flowchart;
-    scene::flowchart(&chart, &FontMetrics, theme)
+    scene::flowchart(&chart, &FontMetrics, theme).unwrap()
 }
 
 /// Draws at `scale` with normal quality.
-fn write(s: &Scene, scale: f32) -> Result<Vec<u8>, String> {
+fn write(s: &Scene, scale: f32) -> sirene_core::Result<Vec<u8>> {
     png::write(
         s,
         Options {
@@ -161,7 +161,7 @@ fn empty_scene_is_an_error() {
         elements: Vec::new(),
     };
     let e = write(&s, 1.0).unwrap_err();
-    assert!(e.starts_with("cannot draw the diagram: "), "{e}");
+    assert!(e.report().starts_with("cannot draw the diagram: "), "{e}");
 }
 
 #[test]
@@ -169,8 +169,15 @@ fn errors() {
     let s = scene_of("flowchart\nA\n", &Theme::LIGHT);
     for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
         let e = write(&s, bad).unwrap_err();
-        assert!(e.starts_with("scale must be a positive number"), "{e}");
+        assert!(
+            e.report().starts_with("scale must be a positive number"),
+            "{e}"
+        );
     }
     let e = write(&s, 1000.0).unwrap_err();
-    assert!(e.contains("too large (at most 16384 pixels a side)"), "{e}");
+    assert!(
+        e.report()
+            .contains("too large (at most 16384 pixels a side)"),
+        "{e}"
+    );
 }

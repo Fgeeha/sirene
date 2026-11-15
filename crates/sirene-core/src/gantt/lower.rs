@@ -369,12 +369,15 @@ fn date_tasks(g: &Gantt, raws: &[Raw], diagnostics: &mut Vec<Diagnostic>) -> Vec
                 names.iter().map(|n| out[ids[n.as_str()]]).collect()
             };
             let start = match &r.start {
-                Start::Previous => match out[r.previous.expect("checked when read")] {
+                Start::Previous => match r.previous.and_then(|p| out[p]) {
                     Some(d) => d.1,
                     None => break 'task None,
                 },
                 Start::After(names) => match lookup(names) {
-                    Some(v) => v.iter().map(|d| d.1).max().expect("ids given"),
+                    Some(v) => match v.iter().map(|d| d.1).max() {
+                        Some(end) => end,
+                        None => break 'task None,
+                    },
                     None => break 'task None,
                 },
                 Start::Date(s) => match date(s) {
@@ -390,7 +393,10 @@ fn date_tasks(g: &Gantt, raws: &[Raw], diagnostics: &mut Vec<Diagnostic>) -> Vec
             };
             let (end, manual) = if let Some(names) = &untils[i] {
                 match lookup(names) {
-                    Some(v) => (v.iter().map(|d| d.0).min().expect("ids given"), false),
+                    Some(v) => match v.iter().map(|d| d.0).min() {
+                        Some(start) => (start, false),
+                        None => break 'task None,
+                    },
                     None => break 'task None,
                 }
             } else if let Some(t) = time::parse_dayjs(&r.end, &g.date_format, g.now) {

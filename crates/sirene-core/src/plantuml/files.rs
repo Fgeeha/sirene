@@ -12,13 +12,13 @@ use crate::syntax::SyntaxNode;
 use crate::treeview::{Entry, TreeView};
 
 /// The entry at `path` (indices into each level's children) in `entries`.
-fn entry<'a>(entries: &'a mut [Entry], path: &[usize]) -> &'a mut Entry {
-    let (first, rest) = path.split_first().expect("a path has an entry");
-    let mut e = &mut entries[*first];
+fn entry<'a>(entries: &'a mut [Entry], path: &[usize]) -> Option<&'a mut Entry> {
+    let (first, rest) = path.split_first()?;
+    let mut e = entries.get_mut(*first)?;
     for &i in rest {
-        e = &mut e.children[i];
+        e = e.children.get_mut(i)?;
     }
-    e
+    Some(e)
 }
 
 pub(crate) fn lower(root: &SyntaxNode) -> (TreeView, Vec<Diagnostic>) {
@@ -52,7 +52,13 @@ pub(crate) fn lower(root: &SyntaxNode) -> (TreeView, Vec<Diagnostic>) {
             let text: Vec<&str> = body.iter().map(|l| l.text.as_str()).collect();
             match &last {
                 Some(path) => {
-                    let e = entry(&mut view.entries, path);
+                    let Some(e) = entry(&mut view.entries, path) else {
+                        d.push(Diagnostic::new(
+                            line.range,
+                            "the note's path no longer exists",
+                        ));
+                        continue;
+                    };
                     let note = text.join(" ");
                     match &mut e.description {
                         Some(before) => {
@@ -137,6 +143,16 @@ fn add(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ERRORH-1: a missing internal path is handled without indexing or panicking.
+    #[test]
+    fn entry_rejects_missing_path_components() {
+        let mut entries = vec![Entry::default()];
+        assert!(entry(&mut entries, &[]).is_none());
+        assert!(entry(&mut entries, &[1]).is_none());
+        assert!(entry(&mut entries, &[0, 0]).is_none());
+        assert!(entry(&mut entries, &[0]).is_some());
+    }
 
     fn names(entries: &[Entry]) -> Vec<String> {
         entries

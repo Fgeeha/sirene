@@ -122,6 +122,7 @@ mod tests {
             &Approx,
             &Theme::LIGHT,
         )
+        .unwrap()
     }
 
     fn center(s: &Scene, owner: Owner) -> Pt {

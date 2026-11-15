@@ -1,4 +1,15 @@
 #![doc = include_str!("../README.md")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
 
 pub mod architecture;
 pub mod ascii;
@@ -10,6 +21,7 @@ pub mod diagnostic;
 pub mod diagram;
 pub mod dot;
 pub mod er;
+pub mod error;
 pub mod eventmodel;
 pub mod flowchart;
 pub mod gantt;
@@ -46,4 +58,5 @@ pub mod xychart;
 pub mod zenuml;
 
 pub use diagnostic::{Diagnostic, Severity};
+pub use error::{Error, Result};
 pub use rowan::{TextRange, TextSize};

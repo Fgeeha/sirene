@@ -78,14 +78,22 @@ impl Viewer {
 
     /// The item drawn at window position `p`.
     pub fn item_at(&mut self, p: Point<Pixels>, window: &Window) -> Option<Item> {
+        if self.doc.other.is_some() {
+            return None;
+        }
         let at = self.placement(window);
         let q = Pt::new(
             f32::from(p.x - at.origin.x) / at.zoom,
             f32::from(p.y - at.origin.y) / at.zoom,
         );
         match self.scene(window).hit(q, SLOP / at.zoom)? {
-            Owner::Node(i) => Some(Item::Node(self.doc.chart.nodes[i].id.clone())),
-            Owner::Edge(i) => Some(Item::Edge(i)),
+            Owner::Node(i) => self
+                .doc
+                .chart
+                .nodes
+                .get(i)
+                .map(|n| Item::Node(n.id.clone())),
+            Owner::Edge(i) => (i < self.doc.chart.edges.len()).then_some(Item::Edge(i)),
             Owner::Cluster(_) | Owner::Diagram => None,
         }
     }

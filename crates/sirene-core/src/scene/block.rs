@@ -13,7 +13,7 @@ use crate::layout::{Layout, Point, Rect, Route, Size};
 /// How far an arrow's head reaches past its shaft, as a share of the shaft's thickness.
 const HEAD: f32 = 0.6;
 
-pub fn block(b: &Block, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
+pub fn block(b: &Block, metrics: &impl TextMetrics, theme: &Theme) -> crate::Result<Scene> {
     let px = Px { metrics, theme };
     let chart = &b.chart;
     let node = |i: usize| -> (f64, f64) {
@@ -125,7 +125,7 @@ pub fn block(b: &Block, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
         edges,
         notes: Vec::new(),
     };
-    let (mut scene, off) = paint::draw(chart, &layout, metrics, theme);
+    let (mut scene, off) = paint::draw(chart, &layout, metrics, theme)?;
 
     // Block arrows go under their labels.
     for (i, dirs) in b.arrows.iter().enumerate() {
@@ -165,7 +165,7 @@ pub fn block(b: &Block, metrics: &impl TextMetrics, theme: &Theme) -> Scene {
             .collect();
         scene.elements.splice(at..at, shapes);
     }
-    scene
+    Ok(scene)
 }
 
 /// How many heads point across and how many up or down.

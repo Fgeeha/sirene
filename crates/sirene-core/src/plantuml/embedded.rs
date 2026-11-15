@@ -17,7 +17,8 @@ pub(crate) fn lower_dot(root: &SyntaxNode) -> (Flowchart, Vec<Diagnostic>) {
     if l.background.is_some()
         && let Some(at) = body.find("bgcolor")
     {
-        let at = TextSize::try_from(at).expect("source fits");
+        // `body` has the bounded CST's byte length.
+        let at = TextSize::new(at as u32);
         l.diagnostics.push(Diagnostic::warning(
             TextRange::at(at, TextSize::from(7)),
             "`bgcolor` is not drawn in a PlantUML document",
@@ -33,7 +34,7 @@ const EBNF_HEADER: &str = "railroad-ebnf-beta\n";
 pub(crate) fn lower_ebnf(root: &SyntaxNode) -> (Railroad, Vec<Diagnostic>) {
     let body = lines::body(root, |_| true);
     let (chart, d) = railroad::parse(&format!("{EBNF_HEADER}{body}")).lower();
-    let shift = TextSize::try_from(EBNF_HEADER.len()).expect("header fits");
+    let shift = TextSize::new(EBNF_HEADER.len() as u32);
     let d = d
         .into_iter()
         .map(|mut d| {
