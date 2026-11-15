@@ -562,7 +562,7 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8], follow: bool) -> std::io::Re
     let mut builder = tempfile::Builder::new();
     builder.prefix(".sirene-");
     #[cfg(unix)]
-    {
+    if !meta.as_ref().is_some_and(|m| m.is_file()) {
         use std::os::unix::fs::PermissionsExt;
         // Match ordinary output-file creation, including the caller's umask.
         builder.permissions(std::fs::Permissions::from_mode(0o666));
@@ -608,7 +608,7 @@ fn convert(
     let jobs = || match (&dir, ext) {
         (Some(d), Some(ext)) => {
             let scanned = scan(d, output.as_deref().unwrap_or(d), ext);
-            let (jobs, mut skipped) = distinct(scanned.found);
+            let (jobs, mut skipped) = safe_batch(scanned.found);
             skipped.extend(
                 scanned
                     .errors
@@ -706,8 +706,13 @@ fn convert(
 /// What a file looked like when last rendered: its modification time and length.
 type Stamp = (SystemTime, u64);
 
-/// The stamp of each watched input when it was last rendered.
-type Seen = HashMap<PathBuf, Option<Stamp>>;
+/// The last observed stamp and the next retry for a failed render.
+struct WatchEntry {
+    stamp: Option<Stamp>,
+    missing: bool,
+    retry: Option<(Instant, Duration)>,
+}
+type Seen = HashMap<PathBuf, WatchEntry>;
 
 /// Renders each of `jobs` whose input changed since `seen`, and returns the status lines.
 fn watch_pass(
@@ -716,7 +721,19 @@ fn watch_pass(
     make_dirs: bool,
     render: &impl Fn(&Lowered) -> Result<Vec<u8>>,
 ) -> Vec<String> {
-    seen.retain(|p, _| jobs.iter().any(|(i, _)| i.as_ref() == Some(p)));
+    watch_pass_at(seen, jobs, make_dirs, render, Instant::now())
+}
+
+fn watch_pass_at(
+    seen: &mut Seen,
+    jobs: &[Job],
+    make_dirs: bool,
+    render: &impl Fn(&Lowered) -> Result<Vec<u8>>,
+    clock: Instant,
+) -> Vec<String> {
+    let inputs: std::collections::HashSet<_> =
+        jobs.iter().filter_map(|(i, _)| i.as_ref()).collect();
+    seen.retain(|p, _| inputs.contains(p));
     let mut lines = Vec::new();
     for (input, output) in jobs {
         let Some(input) = input.as_ref() else {
@@ -724,12 +741,45 @@ fn watch_pass(
             continue;
         };
         let now = stamp(input);
-        if seen.get(input) == Some(&now) {
+        let missing = now.is_none()
+            && matches!(std::fs::metadata(input), Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        let prior = seen.get(input);
+        let same = prior.is_some_and(|entry| entry.stamp == now && entry.missing == missing);
+        if same && prior.is_some_and(|entry| entry.retry.is_none_or(|(at, _)| clock < at)) {
             continue;
         }
         log::debug!("{} changed", input.display());
-        seen.insert(input.clone(), now);
         let done = render_one(Some(input), output.as_deref(), make_dirs, render);
+        if done.written || missing {
+            seen.insert(
+                input.clone(),
+                WatchEntry {
+                    stamp: now,
+                    missing,
+                    retry: None,
+                },
+            );
+        } else {
+            let delay = if same {
+                prior
+                    .and_then(|entry| {
+                        entry
+                            .retry
+                            .map(|(_, delay)| (delay * 2).min(Duration::from_secs(30)))
+                    })
+                    .unwrap_or(Duration::from_secs(2))
+            } else {
+                Duration::from_secs(2)
+            };
+            seen.insert(
+                input.clone(),
+                WatchEntry {
+                    stamp: now,
+                    missing,
+                    retry: Some((clock + delay, delay)),
+                },
+            );
+        }
         if done.written {
             lines.push(match output {
                 Some(o) => format!("wrote {}", o.display()),
@@ -790,6 +840,11 @@ fn directory_entries(dir: &Path) -> Result<Vec<Result<(PathBuf, EntryKind)>>> {
             } else if kind.is_file() {
                 EntryKind::File
             } else if kind.is_symlink() {
+                // Only diagram-named links can be inputs. Avoid inspecting unrelated links,
+                // whose targets may be missing or inaccessible.
+                if Lang::of_path(&path).is_none() {
+                    return Ok((path, EntryKind::Other));
+                }
                 // Follow file symlinks, but never recurse into directory symlinks.
                 match std::fs::metadata(&path) {
                     Ok(m) if m.is_file() => EntryKind::File,
@@ -875,35 +930,100 @@ fn scan_with(
 /// An input (stdin when `None`) and its output (stdout when `None`).
 type Job = (Option<PathBuf>, Option<PathBuf>);
 
-/// `found` as jobs, without each input whose output an earlier input already writes (`a.mmd`
-/// beside `a.mermaid`), plus an error line for each input left out.
-/// Outputs compare case-insensitively on macOS and Windows, whose filesystems fold case.
-fn distinct(found: Vec<(PathBuf, PathBuf)>) -> (Vec<Job>, Vec<String>) {
-    distinct_by(found, cfg!(any(target_os = "macos", target_os = "windows")))
+/// Resolve an output's parent, including existing directory symlinks, without following the
+/// final entry: writing replaces an output symlink instead of following it.
+fn output_key(path: &Path) -> std::io::Result<PathBuf> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("output has no filename"))?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut ancestor = parent;
+    let mut missing = Vec::new();
+    let mut resolved = loop {
+        match std::fs::canonicalize(ancestor) {
+            Ok(path) => break path,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // A dangling symlink is not a missing directory we can safely create.
+                match std::fs::symlink_metadata(ancestor) {
+                    Ok(_) => return Err(e),
+                    Err(m) if m.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(m) => return Err(m),
+                }
+                let part = ancestor.file_name().ok_or(e)?;
+                missing.push(part.to_owned());
+                ancestor = ancestor
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."));
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    for part in missing.into_iter().rev() {
+        resolved.push(part);
+    }
+    resolved.push(name);
+    Ok(resolved)
 }
 
-/// `distinct`, with `fold_case` choosing whether outputs differing only in case collide.
-fn distinct_by(found: Vec<(PathBuf, PathBuf)>, fold_case: bool) -> (Vec<Job>, Vec<String>) {
-    let mut writers: HashMap<PathBuf, PathBuf> = HashMap::new();
+fn safe_batch(found: Vec<(PathBuf, PathBuf)>) -> (Vec<Job>, Vec<String>) {
+    safe_batch_by(found, cfg!(any(target_os = "macos", target_os = "windows")))
+}
+
+fn safe_batch_by(found: Vec<(PathBuf, PathBuf)>, fold: bool) -> (Vec<Job>, Vec<String>) {
+    let key = |p: PathBuf| {
+        if fold {
+            PathBuf::from(p.to_string_lossy().to_lowercase())
+        } else {
+            p
+        }
+    };
+    let mut sources = HashMap::new();
+    for (input, _) in &found {
+        match std::fs::canonicalize(input) {
+            Ok(path) => {
+                sources.insert(key(path), input.clone());
+            }
+            Err(e) => {
+                return (
+                    Vec::new(),
+                    vec![format!("error: cannot resolve {}: {e}", input.display())],
+                );
+            }
+        }
+    }
+    let mut writers = HashMap::new();
     let mut jobs = Vec::new();
     let mut skipped = Vec::new();
     for (input, output) in found {
-        let key = if fold_case {
-            PathBuf::from(output.to_string_lossy().to_lowercase())
-        } else {
-            output.clone()
+        let resolved = match output_key(&output) {
+            Ok(path) => key(path),
+            Err(e) => {
+                skipped.push(format!("error: cannot resolve {}: {e}", output.display()));
+                continue;
+            }
         };
-        if let Some(first) = writers.get(&key) {
+        if let Some(source) = sources.get(&resolved) {
+            skipped.push(format!(
+                "error: skipping {}; {} would overwrite input {}",
+                input.display(),
+                output.display(),
+                source.display()
+            ));
+        } else if let Some(first) = writers.get(&resolved) {
             skipped.push(format!(
                 "error: skipping {}; {} also writes {}",
                 input.display(),
-                first.display(),
+                first,
                 output.display()
             ));
-            continue;
+        } else {
+            writers.insert(resolved, input.display().to_string());
+            jobs.push((Some(input), Some(output)));
         }
-        writers.insert(key, input.clone());
-        jobs.push((Some(input), Some(output)));
     }
     (jobs, skipped)
 }
@@ -1189,11 +1309,82 @@ mod tests {
         );
     }
 
+    #[test]
+    fn watch_retries_failed_render_without_input_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("a.mmd");
+        let output = dir.path().join("a.svg");
+        std::fs::write(&input, "flowchart\nA\n").unwrap();
+        let jobs = [(Some(input), Some(output.clone()))];
+        let attempts = std::cell::Cell::new(0);
+        let render = |_: &Lowered| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() < 7 {
+                Err(Error::new("temporary failure"))
+            } else {
+                Ok(b"ok".to_vec())
+            }
+        };
+        let mut seen = Seen::new();
+        let start = Instant::now();
+        for (seconds, count) in [
+            (0, 1),
+            (1, 1),
+            (2, 2),
+            (5, 2),
+            (6, 3),
+            (13, 3),
+            (14, 4),
+            (30, 5),
+            (60, 6),
+            (89, 6),
+        ] {
+            assert!(
+                watch_pass_at(
+                    &mut seen,
+                    &jobs,
+                    false,
+                    &render,
+                    start + Duration::from_secs(seconds)
+                )
+                .is_empty()
+            );
+            assert_eq!(attempts.get(), count);
+        }
+        assert_eq!(
+            watch_pass_at(
+                &mut seen,
+                &jobs,
+                false,
+                &render,
+                start + Duration::from_secs(90)
+            )
+            .len(),
+            1
+        );
+        assert!(
+            watch_pass_at(
+                &mut seen,
+                &jobs,
+                false,
+                &render,
+                start + Duration::from_secs(120)
+            )
+            .is_empty()
+        );
+        assert_eq!(std::fs::read(output).unwrap(), b"ok");
+        assert_eq!(attempts.get(), 7);
+    }
+
     /// The first input to claim an output keeps it; later ones are left out with a reason.
     #[test]
     fn distinct_outputs() {
-        let p = PathBuf::from;
-        let (jobs, skipped) = distinct(vec![
+        let dir = tempfile::tempdir().unwrap();
+        let p = |name| dir.path().join(name);
+        for name in ["a.mermaid", "a.mmd", "b.mmd"] {
+            std::fs::write(p(name), "").unwrap();
+        }
+        let (jobs, skipped) = safe_batch(vec![
             (p("a.mermaid"), p("a.svg")),
             (p("a.mmd"), p("a.svg")),
             (p("b.mmd"), p("b.svg")),
@@ -1207,19 +1398,29 @@ mod tests {
         );
         assert_eq!(
             skipped,
-            ["error: skipping a.mmd; a.mermaid also writes a.svg"]
+            [format!(
+                "error: skipping {}; {} also writes {}",
+                p("a.mmd").display(),
+                p("a.mermaid").display(),
+                p("a.svg").display()
+            )]
         );
     }
 
     /// Outputs differing only in case collide when the filesystem folds case.
     #[test]
     fn distinct_outputs_fold_case() {
-        let p = PathBuf::from;
+        let dir = tempfile::tempdir().unwrap();
+        let p = |name| dir.path().join(name);
+        for name in ["A.mmd", "a.mmd"] {
+            std::fs::write(p(name), "").unwrap();
+        }
         let found = || vec![(p("A.mmd"), p("A.svg")), (p("a.mmd"), p("a.svg"))];
-        let (jobs, skipped) = distinct_by(found(), true);
+        let (jobs, skipped) = safe_batch_by(found(), true);
         assert_eq!(jobs, [(Some(p("A.mmd")), Some(p("A.svg")))]);
-        assert_eq!(skipped, ["error: skipping a.mmd; A.mmd also writes a.svg"]);
-        let (jobs, skipped) = distinct_by(found(), false);
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].contains("also writes"));
+        let (jobs, skipped) = safe_batch_by(found(), false);
         assert_eq!(jobs.len(), 2);
         assert!(skipped.is_empty());
     }
@@ -1301,6 +1502,16 @@ mod tests {
         // A new file, then over it, keeping its mode; no temporary file is left.
         let out = dir.join("out.svg");
         write_file(&out, b"1", false).unwrap();
+        let ordinary = dir.join("ordinary");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&ordinary)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&out).unwrap().permissions().mode() & 0o777,
+            std::fs::metadata(&ordinary).unwrap().permissions().mode() & 0o777
+        );
         std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600)).unwrap();
         write_file(&out, b"2", false).unwrap();
         assert_eq!(read("out.svg"), "2");

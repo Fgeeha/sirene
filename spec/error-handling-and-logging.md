@@ -35,9 +35,9 @@ PNG allocation, parsing, and encoding failures return errors with any available 
 
 CLI and release-tool output uses fallible writes. A failed output stream terminates cleanly
 with a failure status, without panicking while reporting that failure. Batch renders and
-checks continue processing accessible files, but any directory-listing, entry, or metadata
-failure is reported and makes the overall command unsuccessful. Watches report failures and
-continue polling for recovery.
+checks continue processing accessible files, but directory-listing and entry failures and
+metadata failures for candidate diagram files are reported and make the command unsuccessful.
+Unrelated symlinks need not resolve. Watches report failures and continue polling for recovery.
 
 ## ERRORH-5 Cancellation and persistence
 
@@ -45,7 +45,9 @@ A negative confirmation or dismissed dialog is cancellation. Failed prompt outpu
 platform dialogs, and dialog receivers are errors, retain their causes, and are reported
 separately. Failed editor saves and exports remain visible in the editor. Settings persistence
 returns or records an observable error; missing settings on initial load remain an expected
-default case.
+default case. Persistent application or settings errors do not hide current document status.
+A settings save failure during exit is presented in the application even when logging is
+disabled, with a way to leave without saving settings.
 
 ## ERRORH-6 Logging configuration
 

@@ -111,8 +111,26 @@ fn directory_entry_failures_fail_checks_and_batch_conversion() {
     assert!(good.with_extension("png").is_file());
 }
 
+/// ERRORH-4: unrelated dangling links do not prevent checking or rendering diagrams.
+#[cfg(unix)]
+#[test]
+fn directory_scan_ignores_unrelated_dangling_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ok.mmd"), "flowchart\nA\n").unwrap();
+    symlink("missing", dir.path().join("README")).unwrap();
+    for command in ["check", "svg"] {
+        sirene().arg(command).arg(dir.path()).assert().success();
+    }
+    assert!(dir.path().join("ok.svg").is_file());
+}
+
 /// ERRORH-3: OS write errors produce failure rather than a panic exit.
-#[cfg(target_os = "linux")]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 fn failing_terminal_streams_do_not_panic() {
     use std::process::{Command as Process, Stdio};
@@ -742,6 +760,77 @@ fn directory_output_collisions() {
     let svg = std::fs::read_to_string(dir.join("a.svg")).unwrap();
     assert!(!svg.contains(">B<"), "{svg}");
     assert!(dir.join("b.svg").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn batch_protects_symlinked_sources_and_resolves_output_directories() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("input");
+    std::fs::create_dir(&dir).unwrap();
+    let source = "flowchart\nA --> B\n";
+    std::fs::write(dir.join("a.svg"), source).unwrap();
+    symlink("a.svg", dir.join("a.mmd")).unwrap();
+    symlink("a.svg", dir.join("b.mmd")).unwrap();
+    std::fs::write(dir.join("c.mmd"), source).unwrap();
+    sirene()
+        .arg("svg")
+        .arg(&dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("would overwrite input"));
+    assert_eq!(std::fs::read_to_string(dir.join("a.svg")).unwrap(), source);
+    assert!(dir.join("b.svg").exists());
+    assert!(dir.join("c.svg").exists());
+
+    // The output can instead alias a different input's symlink target.
+    std::fs::remove_file(dir.join("a.mmd")).unwrap();
+    std::fs::write(dir.join("a.mmd"), source).unwrap();
+    sirene()
+        .arg("svg")
+        .arg(&dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("would overwrite input"));
+    assert_eq!(std::fs::read_to_string(dir.join("a.svg")).unwrap(), source);
+
+    let out = tmp.path().join("out");
+    let shared = tmp.path().join("shared");
+    std::fs::create_dir(&out).unwrap();
+    std::fs::create_dir(&shared).unwrap();
+    for name in ["x", "y"] {
+        std::fs::create_dir(dir.join(name)).unwrap();
+        std::fs::write(dir.join(name).join("diagram.mmd"), source).unwrap();
+        symlink(&shared, out.join(name)).unwrap();
+    }
+    sirene()
+        .arg("svg")
+        .arg(&dir)
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("also writes"));
+    assert!(shared.join("diagram.svg").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn batch_replaces_output_symlink_without_touching_source() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let source = "flowchart\nA\n";
+    std::fs::write(dir.join("a.mmd"), source).unwrap();
+    symlink("a.mmd", dir.join("a.svg")).unwrap();
+    sirene().arg("svg").arg(dir).assert().success();
+    assert_eq!(std::fs::read_to_string(dir.join("a.mmd")).unwrap(), source);
+    assert!(
+        !std::fs::symlink_metadata(dir.join("a.svg"))
+            .unwrap()
+            .is_symlink()
+    );
 }
 
 #[cfg(unix)]
@@ -2039,11 +2128,15 @@ fn state_diagrams() {
 }
 
 /// `update` decisions with `--to` make no network request (UPDATE-1, UPDATE-3, UPDATE-6).
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 fn update() {
     let current = env!("CARGO_PKG_VERSION");
     let target = predicate::str::is_match(
-        r"\(target (x86_64|aarch64)-(apple-darwin|unknown-linux-(gnu|musl))\)\n$",
+        r"\(target (x86_64|aarch64)-(apple-darwin|unknown-linux-(gnu|musl))\)",
     )
     .unwrap();
     sirene()
@@ -2051,8 +2144,9 @@ fn update() {
         .assert()
         .success()
         .stdout(predicate::str::starts_with(format!(
-            "update available: {current} -> 99.0.0 (target "
+            "99.0.0 is newer than sirene {current} (target "
         )))
+        .stdout(predicate::str::contains("release availability not checked"))
         .stdout(target.clone());
     sirene()
         .args(["update", "--check", "--to", current])

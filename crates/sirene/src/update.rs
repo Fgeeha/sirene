@@ -172,8 +172,21 @@ fn updater(
         .verifying_keys(KEYS);
     if let Some(v) = version {
         b.release_tag(format!("v{v}"));
+        let expected = format!("sirene-{v}-{target}.tar.gz");
+        b.asset_matcher(move |assets| exact_asset(assets, &expected));
     }
     b.build()
+}
+
+/// Select only the archive built for this exact release and target.
+fn exact_asset(
+    assets: &[self_update::ReleaseAsset],
+    expected: &str,
+) -> Option<self_update::ReleaseAsset> {
+    assets
+        .iter()
+        .find(|asset| asset.name() == expected)
+        .cloned()
 }
 
 /// The latest release's version.
@@ -284,10 +297,19 @@ fn run_update(args: Args, out: &mut impl Write) -> Result<()> {
             return note(out);
         }
         Decision::Update if args.check => {
-            say(
-                out,
-                format_args!("update available: {current} -> {version} (target {triple})"),
-            )?;
+            if explicit {
+                say(
+                    out,
+                    format_args!(
+                        "{version} is newer than sirene {current} (target {triple}); release availability not checked"
+                    ),
+                )?;
+            } else {
+                say(
+                    out,
+                    format_args!("update available: {current} -> {version} (target {triple})"),
+                )?;
+            }
             return note(out);
         }
         Decision::Update => {}
@@ -428,7 +450,32 @@ mod tests {
         );
         assert_eq!(target("windows", "x86_64", false), None);
         assert_eq!(target("linux", "riscv64", false), None);
-        assert!(this_target().is_some());
+        assert_eq!(
+            this_target(),
+            target(
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                cfg!(target_env = "musl")
+            )
+        );
+    }
+
+    #[test]
+    fn release_assets_require_exact_version_and_target() {
+        let expected = "sirene-1.2.3-x86_64-unknown-linux-musl.tar.gz";
+        let asset = |name| self_update::ReleaseAsset::new(name, "https://example.invalid/archive");
+        let wrong = [
+            asset("sirene-1.2.3-x86_64-unknown-linux-gnu.tar.gz"),
+            asset("sirene-1.2.4-x86_64-unknown-linux-musl.tar.gz"),
+            asset("other-sirene-1.2.3-x86_64-unknown-linux-musl.tar.gz"),
+            asset("sirene-1.2.3-x86_64-unknown-linux-musl.tar.gz.sig"),
+        ];
+        assert!(exact_asset(&wrong, expected).is_none());
+        let mut assets = wrong.to_vec();
+        assets.insert(2, asset(expected));
+        assert_eq!(exact_asset(&assets, expected).unwrap().name(), expected);
+        assets.reverse();
+        assert_eq!(exact_asset(&assets, expected).unwrap().name(), expected);
     }
 
     #[test]

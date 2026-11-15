@@ -53,6 +53,24 @@ fn invalid_flowchart_returns_errors_from_every_rendering_boundary() {
 }
 
 #[test]
+fn collapsed_subgraph_does_not_hide_invalid_endpoints() {
+    let mut chart = flowchart::parse(
+        "flowchart\nsubgraph group\n A\nend\n A --> B\n group@{ view: collapsed }\n",
+    )
+    .lower()
+    .flowchart;
+    assert!(chart.collapsed().is_some());
+    chart.subgraphs[0].members.push("missing".into());
+    chart.edges[0].from = "missing".into();
+    for error in [
+        ascii::render(&chart, &Options::default()).unwrap_err(),
+        scene::flowchart(&chart, &Approx, &Theme::LIGHT).unwrap_err(),
+    ] {
+        assert!(error.report().contains("unknown edge endpoint `missing`"));
+    }
+}
+
+#[test]
 fn invalid_layout_endpoint_is_an_error() {
     let graph = Graph {
         edges: vec![EdgeSpec {

@@ -94,7 +94,8 @@ in `crates/sirene/tests/cli.rs` and `arguments` in `crates/sirene/src/main.rs`.
 
 `sirene svg DIR` and `sirene png DIR` render every diagram file under DIR (by `Lang::of_path`:
 `.mmd`, `.mermaid`, `.dot`, `.gv`, `.puml`, `.plantuml`, `.pu`, and `.iuml`, in any case), recursing
-into subdirectories but skipping hidden entries and symlinked directories, in path order. Each is
+into subdirectories but skipping hidden entries and symlinked directories, in path order. Scanning
+does not resolve unrelated symlinks; an unresolvable diagram-file symlink is reported. Each is
 written as `.svg` or `.png` beside it, or with `-o OUTDIR` to the same relative path under OUTDIR
 (directories are created as needed). Diagnostics follow CLI-3 for each file; one file's errors
 fail the run without stopping the others. Output paths compare without regard to case on
@@ -102,8 +103,11 @@ macOS and Windows, and with regard to case on other platforms. When two diagrams
 the same output (`a.mmd` beside `a.mermaid`, or `A.mmd` beside `a.mmd` on macOS and Windows),
 the first in path order is rendered and each later one is
 skipped with `error: skipping LATER; FIRST also writes OUTPUT`, which fails the run (in a watch,
-the line is printed again only when the set of skipped files changes). These are errors that
-render nothing: a DIR with no diagrams (`error: no .mmd, .mermaid, .dot, .gv, .puml, .plantuml,
+the line is printed again only when the set of skipped files changes). Output directory symlinks
+are resolved for collision checks. An output that would replace any
+discovered input (including a symlink's target) is skipped with an error; a final output symlink
+is replaced rather than followed. A source or output path that cannot be resolved is reported.
+These are errors that render nothing: a DIR with no diagrams (`error: no .mmd, .mermaid, .dot, .gv, .puml, .plantuml,
 .pu, or .iuml files in DIR`), a DIR that
 cannot be listed (`error: cannot read DIR: REASON`), an OUTDIR that exists and is not a directory
 (`error: OUTDIR is not a directory; a DIR renders into one`), and a directory given to
@@ -116,7 +120,10 @@ cannot be listed (`error: cannot read DIR: REASON`), an OUTDIR that exists and i
 every 500ms it renders again each input whose modification time or length changed, and in a
 directory, each diagram that appeared. It prints `watching PATH (Ctrl-C to stop)` to stderr at
 start, then `wrote OUTPUT` (or `printed FILE` for stdout) after each render, along with any
-diagnostics and read or write errors; none of these stop the watch. Watching stdin is an error
+diagnostics and read or write errors; none of these stop the watch. Failures to read, render, or
+write a present input are retried even when its stamp has not changed, with delays doubling
+from two seconds to at most 30 seconds; a changed input is retried immediately.
+Watching stdin is an error
 (`error: --watch needs a FILE or directory, not stdin`). Tests: `watch_needs_a_path`,
 `watch_renders_changes`, and `watch_a_file` in `crates/sirene/tests/cli.rs`.
 
@@ -143,16 +150,18 @@ The Markdown file is never changed, except with `--link`: then, after each close
 was written, a line `![diagram N](PATH)` (PATH relative to the Markdown file's directory, with
 `..` to leave it; an absolute `-o` outside that directory stays absolute; in `<...>` when it holds
 a space or parenthesis), indented as the fence, is inserted unless the line after the block
-already is that line, and `linked the images in NAME` is printed. A `![diagram ...](...)` line
-there from an earlier run with another number is replaced. The
+already is that line in the same container and indentation, and `linked the images in NAME` is
+printed. A numbered `![diagram N](...)` line there from an earlier run with another number is
+replaced. The
 diagram blocks themselves are never removed or changed. `--watch` renders again whenever the file changes; the links it adds do not count as
 a change. `sirene ascii FILE.md` prints the blocks instead (CLI-2). Tests: `markdown_images`, `markdown_links_from_the_file`, and `watch_markdown` in
 `crates/sirene/tests/cli.rs`, and
 the unit tests in `crates/sirene/src/markdown.rs`.
 
-Image paths encode literal URI syntax (`#`, `?`, `%`, and `:`) as percent escapes, keeping
-directory separators, so a file named `guide#v2-1.svg` is linked as `guide%23v2-1.svg` rather
-than as a fragment. Test: `markdown_links_encode_filename_delimiters` in
+Image paths encode literal URI syntax (`#`, `?`, `%`, `:`, and `&`), ASCII controls, and Unix
+filename backslashes as percent escapes, keeping directory separators, so a file named
+`guide#v2-1.svg` is linked as `guide%23v2-1.svg` rather than as a fragment. Test:
+`markdown_links_encode_filename_delimiters` in
 `crates/sirene/tests/cli.rs`.
 
 ## CLI-13 `--lang`

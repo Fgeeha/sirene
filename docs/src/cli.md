@@ -93,6 +93,8 @@ One file's errors fail the run without stopping the others. When two diagrams wo
 same output (`a.mmd` beside `a.mermaid`), the first in path order wins and the other is reported.
 On macOS and Windows, output paths compare without regard to case, so `A.mmd` and `a.mmd`
 also collide.
+Output directory symlinks are resolved when checking collisions. An output that would replace
+any input, including the target of an input symlink, is skipped and reported.
 
 ## Markdown files
 
@@ -154,6 +156,8 @@ update available: 0.4.0 -> 0.4.1 (target x86_64-unknown-linux-gnu)
 It never downgrades. A sirene installed by Homebrew or `cargo install` is refused with the
 command that updates it (`brew upgrade sirene`, `brew upgrade --cask sirene`, or
 `cargo install sirene`). `GH_TOKEN` or `GITHUB_TOKEN` authenticates the requests when set.
+With both `--check` and `--to`, sirene compares versions locally; it does not check whether the
+requested release or its archive exists.
 
 ## Watching
 

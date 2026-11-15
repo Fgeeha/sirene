@@ -257,3 +257,35 @@ fn persistence_errors_are_retained_and_clear_after_success(cx: &mut TestAppConte
     });
     assert_eq!(std::fs::read(&obstruction).unwrap(), b"keep");
 }
+
+/// ERRORH-5: the last window stays open if its final settings write fails.
+#[gpui::test]
+fn failed_exit_save_keeps_window_open_until_retry(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let obstruction = dir.path().join("not-a-directory");
+    std::fs::write(&obstruction, b"keep").unwrap();
+    cx.update(|cx| {
+        cx.set_global(Settings {
+            file: Some(obstruction.join("settings")),
+            ..Settings::default()
+        })
+    });
+    let (viewer, vcx) = open(cx, Document::untitled());
+    let can_close = vcx.update(|window, cx| viewer.update(cx, |v, cx| v.should_close(window, cx)));
+    assert!(!can_close);
+    assert!(vcx.update(|_, cx| {
+        settings::last_error(cx)
+            .unwrap()
+            .report()
+            .contains("close again")
+    }));
+    let can_close = vcx.update(|window, cx| viewer.update(cx, |v, cx| v.should_close(window, cx)));
+    assert!(
+        can_close,
+        "a second close explicitly accepts losing settings"
+    );
+    vcx.update(|_, cx| cx.set_global(Settings::load(dir.path().join("settings"))));
+    let can_close = vcx.update(|window, cx| viewer.update(cx, |v, cx| v.should_close(window, cx)));
+    assert!(can_close);
+    assert!(vcx.update(|_, cx| settings::last_error(cx).is_none()));
+}

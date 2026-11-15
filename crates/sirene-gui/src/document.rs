@@ -51,6 +51,18 @@ pub enum Disk {
     Conflict,
 }
 
+/// The current disk state requiring explicit confirmation before it may be overwritten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveConflict {
+    path: PathBuf,
+    resolved: Option<PathBuf>,
+    #[cfg(unix)]
+    identity: Option<(u64, u64)>,
+    text: String,
+    error: Option<String>,
+    metadata: Option<(u64, Option<std::time::SystemTime>)>,
+}
+
 /// A Markdown file, edited one diagram block at a time (WYSIWY-20).
 #[derive(Debug, Clone)]
 pub struct Markdown {
@@ -365,9 +377,75 @@ impl Document {
         self.show_block(block);
     }
 
+    /// Returns the disk state requiring confirmation when saving to this path. This never
+    /// reloads the document. Confirmations apply only to the exact observed disk state.
+    pub fn save_conflict(&self, path: &Path) -> Option<SaveConflict> {
+        let original = self.path.as_deref()?;
+        if !same_path(original, path) {
+            return None;
+        }
+        let (text, error) = Self::read_text(path);
+        let current_error = error.as_ref().map(Error::report);
+        let baseline_error = self.read_error.as_ref().map(Error::report);
+        // A missing file can be created, provided no directory entry has appeared since.
+        let missing = self.read_error.as_ref().is_some_and(|e| {
+            use std::error::Error as _;
+            e.source()
+                .and_then(|e| e.downcast_ref::<std::io::Error>())
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        }) && matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        if missing {
+            return None;
+        }
+        if baseline_error.is_some() || text != self.saved || current_error != baseline_error {
+            Some(SaveConflict {
+                path: path.to_owned(),
+                resolved: std::fs::canonicalize(path).ok(),
+                #[cfg(unix)]
+                identity: {
+                    use std::os::unix::fs::MetadataExt;
+                    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+                },
+                text,
+                error: current_error,
+                metadata: std::fs::metadata(path)
+                    .ok()
+                    .map(|m| (m.len(), m.modified().ok())),
+            })
+        } else {
+            None
+        }
+    }
+
+    fn ensure_save_allowed(&self, path: &Path, approved: Option<&SaveConflict>) -> Result<()> {
+        let conflict = self.save_conflict(path);
+        if conflict.as_ref() != approved {
+            return Err(Error::new(format!(
+                "{} changed on disk or could not be read; confirm before overwriting",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+
     /// Writes the text to the file through a temporary file in the same directory
     /// (WYSIWY-4). On failure the document stays edited and records the error.
     pub fn save(&mut self) -> Result<()> {
+        self.save_confirmed(None)
+    }
+
+    /// Saves after approving the exact disk state returned by `save_conflict`.
+    pub fn save_confirmed(&mut self, approved: Option<&SaveConflict>) -> Result<()> {
+        if let Some(path) = &self.path
+            && let Err(e) = self.ensure_save_allowed(path, approved)
+        {
+            self.write_error = Some(e.clone());
+            return Err(e);
+        }
+        self.save_unchecked()
+    }
+
+    fn save_unchecked(&mut self) -> Result<()> {
         let result = match &self.path {
             Some(path) => write_atomic(path, self.text().as_bytes())
                 .map_err(|e| Error::with_source(format!("cannot write {}", path.display()), e)),
@@ -393,6 +471,19 @@ impl Document {
     /// a block named for its language; saving a Markdown file's block as a diagram writes the
     /// block alone. On failure the document keeps its file and records the error.
     pub fn save_as(&mut self, path: PathBuf) -> Result<()> {
+        self.save_as_confirmed(path, None)
+    }
+
+    /// Saves as `path` after approving the exact disk state returned by `save_conflict`.
+    pub fn save_as_confirmed(
+        &mut self,
+        path: PathBuf,
+        approved: Option<&SaveConflict>,
+    ) -> Result<()> {
+        if let Err(e) = self.ensure_save_allowed(&path, approved) {
+            self.write_error = Some(e.clone());
+            return Err(e);
+        }
         let markdown = match (&self.markdown, is_markdown(&path)) {
             (Some(_), false) => None,
             (None, true) => {
@@ -412,7 +503,7 @@ impl Document {
             markdown,
             ..self.clone()
         };
-        let result = next.save();
+        let result = next.save_unchecked();
         match &result {
             Ok(()) => {
                 // The new file's extension may read the diagram as another language.
@@ -488,6 +579,23 @@ impl Document {
     }
 }
 
+/// Whether two paths identify the same file, including hard links on Unix.
+fn same_path(a: &Path, b: &Path) -> bool {
+    if a == b
+        || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
+    {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(a), Ok(b)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+            return (a.dev(), a.ino()) == (b.dev(), b.ino());
+        }
+    }
+    false
+}
+
 /// The info string of a Markdown block holding `source`, read as `lang` when given: `dot`,
 /// `plantuml`, or `mermaid` (MARKDO-1).
 fn fence_info(source: &str, lang: Option<Lang>) -> &'static str {
@@ -557,7 +665,16 @@ fn write_atomic_with(
 ) -> std::io::Result<()> {
     use std::io::Write;
 
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let path = match std::fs::canonicalize(path) {
+        Ok(path) => path,
+        Err(error) => {
+            // A dangling or otherwise unresolvable link must never be replaced by a save.
+            if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(error);
+            }
+            path.to_owned()
+        }
+    };
     log::debug!("writing {}", path.display());
     let meta = std::fs::metadata(&path).ok();
     if meta.as_ref().is_some_and(|m| m.permissions().readonly()) {
@@ -566,44 +683,31 @@ fn write_atomic_with(
             "the file is read-only",
         ));
     }
-    let name = path
-        .file_name()
-        .map_or_else(|| "file".into(), |n| n.to_string_lossy().into_owned());
-    let tmp = path.with_file_name(format!(".{name}.sirene-save"));
-    // A leftover temporary file, or anything planted there, is replaced, never written through.
-    let _ = std::fs::remove_file(&tmp);
-    // `Ok(false)`: the owner cannot be kept.
-    let staged = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        if let Some(meta) = &meta {
-            file.set_permissions(meta.permissions())?;
-            if keep_owner(&file, meta).is_err() {
-                return Ok(false);
-            }
-        }
-        file.write_all(text)?;
-        file.sync_all()?;
-        Ok(true)
-    })();
-    let result = match staged {
-        Ok(true) => {
-            log::debug!("renaming {} over it", tmp.display());
-            std::fs::rename(&tmp, &path)
-        }
-        Ok(false) => {
-            log::debug!("cannot keep the file's owner; writing in place");
-            let _ = std::fs::remove_file(&tmp);
-            write_in_place(&path, text)
-        }
-        Err(e) => Err(e),
-    };
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".sirene-");
+    #[cfg(unix)]
+    if meta.is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        // Match ordinary creation, including the caller's umask.
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
     }
-    result
+    let mut file = builder.tempfile_in(parent)?;
+    if let Some(meta) = &meta {
+        file.as_file().set_permissions(meta.permissions())?;
+        if keep_owner(file.as_file(), meta).is_err() {
+            log::debug!("cannot keep the file's owner; writing in place");
+            drop(file);
+            return write_in_place(&path, text);
+        }
+    }
+    file.write_all(text)?;
+    file.as_file().sync_all()?;
+    file.persist(&path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 /// Overwrites `path` itself, keeping its inode and so its owner.
@@ -819,7 +923,8 @@ mod tests {
         d.set_source("flowchart LR\nA --> B\n".into());
         std::fs::write(&path, "flowchart LR\nX\n").unwrap();
         assert_eq!(d.poll(), Disk::Conflict);
-        d.save().unwrap();
+        let conflict = d.save_conflict(&path).unwrap();
+        d.save_confirmed(Some(&conflict)).unwrap();
         assert!(!d.is_edited());
         assert!(!d.disk_changed);
         assert_eq!(
@@ -850,7 +955,7 @@ mod tests {
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
         let link = dir.path().join("link.mmd");
         symlink(&target, &link).unwrap();
-        // Planted at the temporary name: must not receive the text.
+        // The old temporary name is unrelated and must not be touched.
         let victim = dir.path().join("victim");
         std::fs::write(&victim, "keep").unwrap();
         symlink(&victim, dir.path().join(".real.mmd.sirene-save")).unwrap();
@@ -876,8 +981,82 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         names.sort();
-        assert_eq!(names, ["link.mmd", "real.mmd", "victim"]);
+        assert_eq!(
+            names,
+            [".real.mmd.sirene-save", "link.mmd", "real.mmd", "victim"]
+        );
         assert_eq!(d.poll(), Disk::Unchanged);
+    }
+
+    #[test]
+    fn save_preserves_file_at_old_temporary_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mmd");
+        let existing = dir.path().join(".a.mmd.sirene-save");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::write(&existing, "unrelated").unwrap();
+        write_atomic(&path, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(existing).unwrap(), "unrelated");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_file_uses_normal_creation_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let normal = dir.path().join("normal");
+        let saved = dir.path().join("saved");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&normal)
+            .unwrap();
+        write_atomic(&saved, b"new").unwrap();
+        assert_eq!(
+            std::fs::metadata(normal).unwrap().permissions().mode() & 0o777,
+            std::fs::metadata(saved).unwrap().permissions().mode() & 0o777
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_does_not_replace_dangling_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("link.mmd");
+        symlink("missing.mmd", &link).unwrap();
+        assert!(write_atomic(&link, b"new").is_err());
+        assert_eq!(std::fs::read_link(&link).unwrap(), Path::new("missing.mmd"));
+        assert!(!dir.path().join("missing.mmd").exists());
+    }
+
+    #[test]
+    fn simultaneous_saves_do_not_share_staging_files() {
+        use std::sync::{Arc, Barrier};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mmd");
+        std::fs::write(&path, "old").unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let workers: Vec<_> = [b"first".as_slice(), b"second".as_slice()]
+            .into_iter()
+            .map(|data| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    write_atomic_with(&path, data, |_, _| {
+                        barrier.wait();
+                        Ok(())
+                    })
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        let saved = std::fs::read(&path).unwrap();
+        assert!(saved == b"first" || saved == b"second");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     /// A read-only file is refused and left alone.

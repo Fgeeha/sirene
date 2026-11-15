@@ -335,6 +335,7 @@ pub fn flowchart(
         let layout = layout::layout(&chart.layout_graph(&px)?, &CONFIG)?;
         return Ok(draw(chart, &layout, metrics, theme)?.0);
     };
+    chart.validate_edge_endpoints()?;
     // Collapsed subgraphs (FLOWMO-15): draw the folded chart, owned by the original's elements.
     let layout = layout::layout(&c.chart.layout_graph(&px)?, &CONFIG)?;
     let mut scene = draw(&c.chart, &layout, metrics, theme)?.0;

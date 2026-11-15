@@ -28,9 +28,9 @@ the status bar.
 
 Save (secondary-s) writes the text to the document's file, replacing it through a temporary file
 in the same directory, and the document is no longer edited. The text is synced to disk before
-the rename, the file keeps its permissions, owner, and group, a symlinked file stays a symlink
-(its target is written), and anything already at the temporary name is replaced, not written
-through. When the owner cannot be kept (another user's file), the file is overwritten in place
+the rename, the file keeps its permissions, owner, and group, and a symlinked file stays a symlink
+(its target is written). An unresolvable symlink is not replaced. Each save creates its own
+temporary file without disturbing existing files. When the owner cannot be kept (another user's file), the file is overwritten in place
 instead. A read-only file is not saved: `cannot write PATH: the file is read-only`. Save As (secondary-shift-s), and
 Save on an Untitled document, ask for a path first (starting in the directory an export would,
 GUISHE-9, with `diagram.mmd` for Untitled); the window then shows that file. A failed
@@ -43,7 +43,7 @@ new text replaces the editor's text, keeping the cursor line where it still exis
 document is edited, the editor keeps its text and the status bar says the file changed on disk;
 Reload replaces the edits with the file's text. Reload on an edited document first asks
 ("Discard your changes to NAME?", Reload or Cancel), and Save after the file changed on disk
-first asks ("NAME changed on disk. Overwrite it?", Overwrite or Cancel); Cancel changes nothing.
+first checks the current file and asks before overwriting changes or a file that could not be read (Overwrite or Cancel); Cancel changes nothing. The check also applies before the next poll and when Save As selects an alias of the current file. A file that could not be read may instead be saved to a different path. A confirmed save checks again that the file has not changed while the prompt was open.
 
 ## WYSIWY-6 Closing with unsaved edits
 

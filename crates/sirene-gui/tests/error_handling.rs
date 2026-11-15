@@ -109,3 +109,99 @@ fn failed_render_keeps_existing_export_and_clipboard(cx: &mut TestAppContext) {
     assert!(status.contains("cannot copy the drawing"), "{status}");
     assert!(status.contains("endpoint"), "{status}");
 }
+
+#[test]
+fn unreadable_original_requires_explicit_overwrite_and_allows_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("invalid.mmd");
+    std::fs::write(&original, [0xff, 0xfe]).unwrap();
+    let mut doc = Document::open(&original);
+    doc.set_source("flowchart\nRecovered\n".into());
+    assert!(doc.save().is_err());
+    assert_eq!(std::fs::read(&original).unwrap(), [0xff, 0xfe]);
+    assert!(doc.is_edited());
+    let recovery = dir.path().join("recovered.mmd");
+    doc.save_as(recovery.clone()).unwrap();
+    assert_eq!(std::fs::read(&original).unwrap(), [0xff, 0xfe]);
+    assert_eq!(
+        std::fs::read_to_string(recovery).unwrap(),
+        "flowchart\nRecovered\n"
+    );
+
+    let missing = dir.path().join("new.mmd");
+    let mut doc = Document::open(&missing);
+    doc.set_source("flowchart\nNew\n".into());
+    doc.save().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(missing).unwrap(),
+        "flowchart\nNew\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_original_aliases_require_confirmation() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("invalid.mmd");
+    let hard = dir.path().join("hard.mmd");
+    let link = dir.path().join("link.mmd");
+    std::fs::write(&original, [0xff]).unwrap();
+    std::fs::hard_link(&original, &hard).unwrap();
+    symlink(&original, &link).unwrap();
+    let mut doc = Document::open(&original);
+    doc.set_source("flowchart\nRecovered\n".into());
+    for alias in [&hard, &link] {
+        assert!(doc.save_as(alias.to_path_buf()).is_err());
+        assert_eq!(std::fs::read(&original).unwrap(), [0xff]);
+    }
+    let conflict = doc.save_conflict(&link).unwrap();
+    doc.save_as_confirmed(link, Some(&conflict)).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&original).unwrap(),
+        "flowchart\nRecovered\n"
+    );
+}
+
+#[test]
+fn save_detects_unpolled_and_newer_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("diagram.mmd");
+    std::fs::write(&path, "flowchart\nOriginal\n").unwrap();
+    let mut doc = Document::open(&path);
+    doc.set_source("flowchart\nMine\n".into());
+    std::fs::write(&path, "flowchart\nTheirs\n").unwrap();
+    assert!(doc.save().is_err());
+    let conflict = doc.save_conflict(&path).unwrap();
+    std::fs::write(&path, "flowchart\nNewer\n").unwrap();
+    assert!(doc.save_confirmed(Some(&conflict)).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "flowchart\nNewer\n"
+    );
+    assert!(doc.is_edited());
+    let conflict = doc.save_conflict(&path).unwrap();
+    doc.save_confirmed(Some(&conflict)).unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "flowchart\nMine\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn confirmation_does_not_follow_a_retargeted_symlink() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.mmd");
+    let second = dir.path().join("second.mmd");
+    let link = dir.path().join("link.mmd");
+    std::fs::write(&first, [0xff]).unwrap();
+    std::fs::write(&second, [0xff]).unwrap();
+    symlink(&first, &link).unwrap();
+    let mut doc = Document::open(&link);
+    doc.set_source("flowchart\nMine\n".into());
+    let conflict = doc.save_conflict(&link).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    symlink(&second, &link).unwrap();
+    assert!(doc.save_confirmed(Some(&conflict)).is_err());
+    assert_eq!(std::fs::read(&second).unwrap(), [0xff]);
+    assert!(doc.is_edited());
+}

@@ -128,8 +128,8 @@ Windows, `$XDG_CONFIG_HOME/sirene` or `~/.config/sirene` elsewhere), as `key = v
 `appearance` (`system`, `light`, `dark`), `window` (`WxH`), `source` (`shown`, `hidden`),
 `source_width`, and up to 10 `recent` paths, most recent first. A missing or unreadable file gives
 the defaults; unknown keys and bad values are skipped; a file that cannot be written is skipped.
-A save writes `settings.tmp` beside it and renames it over the file, so a crash never leaves it
-half written.
+A save writes to a unique temporary file beside it and renames it over the file, so a crash never
+leaves it half written and simultaneous saves do not share a temporary file.
 The Appearance, Clear Recent, and showing or hiding the source pane are saved at once; the window
 size and pane width when a window closes and on Quit. Without `run` (as in tests), settings are
 kept in memory only.
