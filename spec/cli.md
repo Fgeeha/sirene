@@ -143,16 +143,18 @@ The Markdown file is never changed, except with `--link`: then, after each close
 was written, a line `![diagram N](PATH)` (PATH relative to the Markdown file's directory, with
 `..` to leave it; an absolute `-o` outside that directory stays absolute; in `<...>` when it holds
 a space or parenthesis), indented as the fence, is inserted unless the line after the block
-already is that line, and `linked the images in NAME` is printed. A `![diagram ...](...)` line
-there from an earlier run with another number is replaced. The
+already is that line in the same container and indentation, and `linked the images in NAME` is
+printed. A numbered `![diagram N](...)` line there from an earlier run with another number is
+replaced. The
 diagram blocks themselves are never removed or changed. `--watch` renders again whenever the file changes; the links it adds do not count as
 a change. `sirene ascii FILE.md` prints the blocks instead (CLI-2). Tests: `markdown_images`, `markdown_links_from_the_file`, and `watch_markdown` in
 `crates/sirene/tests/cli.rs`, and
 the unit tests in `crates/sirene/src/markdown.rs`.
 
-Image paths encode literal URI syntax (`#`, `?`, `%`, and `:`) as percent escapes, keeping
-directory separators, so a file named `guide#v2-1.svg` is linked as `guide%23v2-1.svg` rather
-than as a fragment. Test: `markdown_links_encode_filename_delimiters` in
+Image paths encode literal URI syntax (`#`, `?`, `%`, `:`, and `&`), ASCII controls, and Unix
+filename backslashes as percent escapes, keeping directory separators, so a file named
+`guide#v2-1.svg` is linked as `guide%23v2-1.svg` rather than as a fragment. Test:
+`markdown_links_encode_filename_delimiters` in
 `crates/sirene/tests/cli.rs`.
 
 ## CLI-13 `--lang`
