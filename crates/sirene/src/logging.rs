@@ -80,7 +80,10 @@ impl Filter {
             .enumerate()
             .filter(|(_, d)| {
                 if d.target.is_empty() {
-                    target.starts_with("sirene")
+                    matches!(
+                        target.split("::").next(),
+                        Some("sirene" | "sirene_core" | "sirene_gui")
+                    )
                 } else {
                     target.starts_with(&d.target)
                 }
@@ -192,6 +195,33 @@ mod tests {
         assert!(filter.enabled("sirene", Level::Trace));
         assert!(!filter.enabled("sirene_core::layout", Level::Error));
         assert!(filter.enabled("gpui::platform", Level::Info));
+    }
+
+    #[test]
+    fn general_levels_only_cover_sirene_crates() {
+        let filter = Filter::parse("debug").unwrap();
+        for target in [
+            "sirene",
+            "sirene::update",
+            "sirene_core",
+            "sirene_core::layout",
+            "sirene_gui",
+            "sirene_gui::viewer",
+        ] {
+            assert!(filter.enabled(target, Level::Debug), "{target}");
+        }
+        for target in [
+            "sirene_plugin",
+            "sirene_core_extra::layout",
+            "sirene_gui_extra",
+            "sirenefoo",
+        ] {
+            assert!(!filter.enabled(target, Level::Error), "{target}");
+        }
+
+        let filter = Filter::parse("debug,sirene_plugin=info").unwrap();
+        assert!(filter.enabled("sirene_plugin::module", Level::Info));
+        assert!(!filter.enabled("sirene_plugin::module", Level::Debug));
     }
 
     #[test]
