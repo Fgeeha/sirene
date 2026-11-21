@@ -70,3 +70,19 @@ cargo xtask bundle --binary target/release/sirene    # target/bundle/Sirene.app
 cargo xtask icon                                     # target/bundle/sirene.{icns,png}
 cargo xtask cask --url URL --sha256 HEX --homepage URL
 ```
+
+On Linux, build the editor on the architecture you are packaging. Install `rpm` for
+`find-requires`, `squashfs-tools`, `curl`, and `desktop-file-utils`. The runtime build and the
+Fedora smoke test use Docker. Run these commands from the workspace root, with the version
+from the root `Cargo.toml` and `aarch64` in place of `x86_64` on ARM.
+
+```bash
+cargo install cargo-generate-rpm --version 0.21.0 --locked
+cargo build --locked --release --package sirene
+bash bin/linux-package.sh x86_64 X.Y.Z-dev target/release/sirene target/linux-dist
+bash bin/linux-package-smoke.sh x86_64 X.Y.Z-dev target/release/sirene target/linux-dist
+```
+
+The packaging command stages `target/linux/AppDir` and writes the RPM, AppImage, and AppImage
+runtime source archive to the output directory. A development version such as `X.Y.Z-dev` uses
+`X.Y.Z~dev` in the RPM name and metadata.

@@ -801,8 +801,11 @@ fn the_release_workflow_runs_only_on_main() {
 #[test]
 fn the_release_tarballs_carry_the_notices() {
     let workflow = read(&repo_root().join(".github/workflows/release.yml"));
+    let archive = read(&repo_root().join("bin/release-archive.sh"));
+    assert!(workflow.contains("bash bin/release-archive.sh pack "));
     let tars: Vec<&str> = workflow
         .lines()
+        .chain(archive.lines())
         .filter(|l| l.trim_start().starts_with("tar -czf"))
         .collect();
     assert_eq!(tars.len(), 2, "{tars:?}");
@@ -819,10 +822,148 @@ fn the_release_tarballs_carry_the_notices() {
 #[test]
 fn the_release_carries_sirene_wasm() {
     let workflow = read(&repo_root().join(".github/workflows/release.yml"));
-    assert!(workflow.contains("    needs: [decide, sign, app, wasm]\n"));
+    assert!(workflow.contains("    needs: [decide, sign, app, wasm, linux]\n"));
     assert!(workflow.contains("          name: wasm\n          path: dist\n"));
     assert!(workflow.contains("cp docs/assets/sirene-wasm.js "));
     assert!(repo_root().join("docs/assets/sirene-wasm.js").is_file());
+}
+
+/// The `linux` job packs each gnu tarball's binary as an .rpm and an AppImage (LINUXP-6), and the
+/// release attaches and checksums both.
+#[test]
+fn the_release_carries_the_linux_packages() {
+    let workflow = read(&repo_root().join(".github/workflows/release.yml"));
+    let linux = &workflow[workflow.find("\n  linux:\n").expect("linux job")..];
+    let linux = &linux[..linux.find("\n  release:\n").expect("release job")];
+    assert!(linux.contains("    needs: [decide, build]\n"));
+    assert!(linux.contains("          name: unsigned-${{ matrix.arch }}-unknown-linux-gnu\n"));
+    assert!(linux.contains("bash bin/linux-package.sh "));
+    assert!(linux.contains("linux-dist/*.AppImage-runtime-source.tar.gz"));
+    assert!(linux.contains("bash bin/release-archive.sh extract "));
+    assert!(workflow.contains("bash bin/release-checksums.sh "));
+    let checks = read(&repo_root().join(".github/workflows/linux-packaging.yml"));
+    assert!(checks.contains("  pull_request:\n"));
+    assert!(checks.contains("    branches: [main]\n"));
+    assert!(checks.contains("  contents: read\n"));
+    assert!(checks.contains("bash bin/linux-package.sh "));
+    assert!(checks.contains("bash bin/linux-package-smoke.sh "));
+    for arch in ["x86_64", "aarch64"] {
+        for job in [linux, &checks] {
+            assert!(
+                job.contains(&format!("          - arch: {arch}\n")),
+                "{arch}"
+            );
+        }
+    }
+    assert!(checks.contains("bash bin/release-archive.sh pack "));
+    assert!(checks.contains("bash bin/release-archive.sh extract "));
+    assert!(checks.contains("bash bin/release-checksums.sh "));
+    assert!(checks.contains("merge-multiple: true"));
+    assert_eq!(
+        workflow
+            .matches(
+                "dist/*.tar.gz dist/*.zip dist/*.rpm dist/*.AppImage dist/sirene.rb SHA256SUMS"
+            )
+            .count(),
+        2
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn release_assembly_rejects_missing_and_extra_linux_assets() {
+    let dir = scratch_dir();
+    let root = dir.path();
+    let dist = root.join("dist");
+    std::fs::create_dir(&dist).unwrap();
+    let sums = root.join("SHA256SUMS");
+    for arch in ["x86_64", "aarch64"] {
+        for name in [
+            format!("sirene-1.2.3-1.{arch}.rpm"),
+            format!("Sirene-1.2.3-{arch}.AppImage"),
+            format!("Sirene-1.2.3-{arch}.AppImage-runtime-source.tar.gz"),
+        ] {
+            std::fs::write(dist.join(name), b"fixture").unwrap();
+        }
+    }
+    std::fs::write(dist.join("other.zip"), b"zip").unwrap();
+    let invoke = || {
+        run(
+            "release-checksums.sh",
+            &["1.2.3", dist.to_str().unwrap(), sums.to_str().unwrap()],
+        )
+    };
+    assert!(invoke().status.success());
+    assert!(
+        output(
+            Command::new("sha256sum")
+                .arg("-c")
+                .arg(&sums)
+                .current_dir(&dist)
+        )
+        .status
+        .success()
+    );
+    std::fs::remove_file(dist.join("sirene-1.2.3-1.aarch64.rpm")).unwrap();
+    assert!(!invoke().status.success());
+    std::fs::write(dist.join("sirene-1.2.3-1.aarch64.rpm"), b"fixture").unwrap();
+    std::fs::write(dist.join("extra.rpm"), b"fixture").unwrap();
+    assert!(!invoke().status.success());
+}
+
+#[test]
+fn release_archive_round_trip() {
+    let dir = scratch_dir();
+    let binary = dir.path().join("binary");
+    std::fs::write(&binary, b"binary fixture").unwrap();
+    let dest = dir.path().join("archives");
+    let unpack = dir.path().join("unpack");
+    let packed = run(
+        "release-archive.sh",
+        &[
+            "pack",
+            "1.2.3",
+            "x86_64-unknown-linux-gnu",
+            binary.to_str().unwrap(),
+            dest.to_str().unwrap(),
+        ],
+    );
+    assert!(packed.status.success(), "{}", stderr(&packed));
+    let archive = dest.join("sirene-1.2.3-x86_64-unknown-linux-gnu.tar.gz");
+    let extracted = run(
+        "release-archive.sh",
+        &[
+            "extract",
+            archive.to_str().unwrap(),
+            unpack.to_str().unwrap(),
+        ],
+    );
+    assert!(extracted.status.success(), "{}", stderr(&extracted));
+    assert_eq!(
+        std::fs::read(unpack.join("sirene")).unwrap(),
+        b"binary fixture"
+    );
+}
+
+#[test]
+fn appimage_refuses_bad_arguments_before_any_download() {
+    let dir = scratch_dir();
+    let out = run("appimage.sh", &["x86_64"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let appdir = dir.path().to_str().unwrap();
+    let image = dir.path().join("out.AppImage");
+    let image = image.to_str().unwrap();
+    let out = run("appimage.sh", &["riscv64", appdir, image]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("no AppImage runtime for riscv64"),
+        "{}",
+        stderr(&out)
+    );
+    let out = run("appimage.sh", &["x86_64", appdir, image]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("has no AppRun"), "{}", stderr(&out));
+    assert!(!Path::new(image).exists());
 }
 
 /// The `wasm` job packs @jaemk/sirene and `publish` uploads it through trusted
