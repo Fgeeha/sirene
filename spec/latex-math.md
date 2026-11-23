@@ -102,9 +102,11 @@ the subset in-tree, porting from KaTeX with attribution where useful (LMATH-11).
 6. `@startlatex` in PlantUML, then the other consumers.
 7. Fuzz target and limits (LMATH-6), landing with step 2 so the parser is never unfuzzed.
 
-## LMATH-11 Decision: KaTeX as the target (proposed)
+## LMATH-11 Decision: KaTeX as the target, built in-tree (decided 2026-11-22)
 
-KaTeX is the target in three ways, in this order of confidence:
+Sirene writes its own typesetter so the project stays self-sufficient: no dependency on a
+young third-party engine, and the limits, diagnostics, fuzzing, and display-list fit are
+ours. KaTeX is the target in three ways, in this order of confidence:
 
 1. Syntax and behavior: the command set, macros, error behavior, and `$$` use in Mermaid are
    KaTeX's (LMATH-5, LEMB-1). Settled; it is what Mermaid users write.
@@ -114,20 +116,51 @@ KaTeX is the target in three ways, in this order of confidence:
    This replaces the earlier "borrow the algorithm, not code": the rule holds only for
    sources whose licenses do not allow it. Reading KaTeX's `buildHTML`, delimiter, radical,
    and spacing code is the fastest route to a correct layout.
-3. Layout path, proposed: KaTeX's fonts and metrics first (LRES-1), since they are 514 KB
-   as TTF against a 734 KB MATH-table font, match Mermaid's own drawing, and have a
-   working reference. A MATH-table path (LPA-4) stays possible behind the same box tree, for a
-   user-chosen font or for AsciiMath-heavy PlantUML documents, if there is demand.
+3. Layout path: KaTeX's fonts and metrics (LRES-1), since they are 514 KB as TTF against a
+   734 KB MATH-table font, match Mermaid's own drawing, and have a working reference. A
+   MATH-table path (LPA-4) stays possible behind the same box tree, for a user-chosen font or
+   for AsciiMath-heavy PlantUML documents, if there is demand.
 
-Open before it is final: the metrics data's provenance (LRES-T7b), the stretchy-shape SVG data
-(LRES-T7d), and whether to depend on `RaTeX` (MIT, the same KaTeX fonts and metrics, a
-parser, layout, and display list, pure Rust) instead of porting (LPA-T5). RaTeX also shows the
-approach works in Rust, and its crate split is a model; its maintenance, dependency set, and
-fit to sirene's display list decide whether it is adopted or only learned from.
+The parser and layout are written in-tree in `sirene_core::math`, ported module by module from
+KaTeX's TypeScript with a header on each file naming the KaTeX file it follows and its license
+(LMATH-12). RaTeX (LPA-5) and Temml are references to compare against, not dependencies:
+RaTeX is a 0.1.x project that releases monthly with a 262 KB layout file, and depending on it
+would tie sirene's drawing, limits, and release timing to it. The box tree and `Formula`
+interface (LEMB-4) are sirene's own, so the engine behind them can still change.
+
+Still open: the metrics data's provenance (LRES-T7b) and the stretchy-shape data (LRES-T7d)
+are copied data, so both are read before the port starts.
 
 Where PlantUML differs: it renders with JLaTeXMath, not KaTeX, so a `<latex>` formula can differ
 slightly from PlantUML's own output. KaTeX's behavior is the target for both, since there is
 one typesetter (LMATH-7).
+
+## LMATH-12 Module plan and KaTeX source map
+
+Sizes are the TypeScript files in `KaTeX/KaTeX` `src/` on 2026-11-22. A Rust port is expected
+to be of the same order in lines; the whole core below is about 400 KB of TypeScript, so the
+first subset (LMATH-1) ports roughly half, and the data files are generated.
+
+| Rust module (`sirene_core::math`) | Follows KaTeX | Size | Notes |
+|---|---|---|---|
+| `lexer` | `Lexer.ts`, `Token.ts`, `SourceLocation.ts` | 5 KB | Tokens carry byte ranges in the source, for LEMB-5. |
+| `macros`, `expand` | `MacroExpander.ts`, `macros.ts`, `Namespace.ts`, `defineMacro.ts` | 16 KB, 42 KB | Expansion budget and depth bound (LMATH-6). `\gdef`, `\edef`, `\xdef`, `\let`, `\futurelet` are out of scope (LPA-2). |
+| `symbols` | `symbols.ts`, `unicodeSymbols.js`, `unicodeAccents.js`, `unicodeScripts.ts`, `unicodeSupOrSub.ts`, `wide-character.ts` | 45 KB and small files | Data; generated and tested against the font (LRES-3). |
+| `parser`, `node` | `Parser.ts`, `parseNode.ts`, `parseTree.ts`, `ParseError.ts`, `Settings.ts`, `strict.ts` | 40 KB | One error with a span; `Settings` reduced to what sirene exposes (no `trust`). |
+| `functions/*` | `functions/*.ts` (accent, arrow, delimsizing, enclose, font, genfrac, horizBrace, kern, lap, mclass, op, operatorname, phantom, sizing, smash, sqrt, styling, supsub, text, underline, and more), `defineFunction.ts` | many small files | Each function is a parse rule plus a box builder; `href`, `includegraphics`, `html*`, `verb` are not ported (LPA-2). |
+| `environments` | `environments/array.ts`, `defineEnvironment.ts` | to read | Matrices, `cases`, `aligned`. |
+| `style`, `options`, `units` | `Style.ts`, `Options.ts`, `units.ts` | 3 KB, 9 KB, 4 KB | Display, text, script, and scriptscript styles and sizes. |
+| `metrics` | `fontMetrics.ts`, `fontMetricsData.js` | 9 KB, 96 KB | The data file is generated (LRES-T7b). |
+| `spacing` | `spacingData.ts` | 2 KB | TeX's spacing between atom classes. |
+| `layout` | `buildCommon.ts`, `buildHTML.ts`, `delimiter.ts`, `stretchy.ts`, `svgGeometry.ts` | 26, 15, 30, 14, 30 KB | Produces the box tree of LMATH-2 instead of KaTeX's DOM tree (`domTree.ts`, `tree.ts` are not ported). `buildMathML.ts` and `mathMLTree.ts` are not ported. |
+| `font_data` | `fonts/` | 514 KB TTF | Subset per LRES-T7c. |
+
+Not ported: `Settings` options that load resources or follow links, `trust`, the DOM and MathML
+builders, `\tag` numbering beyond the single formula, and the `contrib/` extensions
+(`mhchem`, `copy-tex`, `auto-render`).
+
+Per LMATH-6, the lexer, expander, and parser each carry their bound from the start, and
+`sirene-fuzz` gets a `math` target with them (LANGS-11).
 
 ## LMATH-T Tasks
 
@@ -140,8 +173,12 @@ tracker; this one holds what is left for the engine itself.
 - [ ] LMATH-T2 Fix the first subset (LMATH-1) from the command table of LPA-2.
 - [ ] LMATH-T3 Write the box tree and `Formula` types, and the TeX-to-MATH parameter table
   (LPA-T4).
-- [ ] LMATH-T4 Decide in-tree or an existing crate (LPA-T5) and record the decision here.
-- [ ] LMATH-T5 Build in the order of LMATH-9.
+- [x] LMATH-T4 Decide in-tree or an existing crate: in-tree (LMATH-11).
+- [ ] LMATH-T5 Build in the order of LMATH-9, module by module from LMATH-12.
+- [ ] LMATH-T6 Read the KaTeX files of LMATH-12 for the first subset, and write the Rust
+  types for tokens, parse nodes, options, and boxes before porting logic.
+- [ ] LMATH-T7 Dropped: the RaTeX spike. RaTeX stays a comparison target for the layout tests
+  (LPA-3), not a dependency.
 
 ## LMATH-10 Open questions
 
