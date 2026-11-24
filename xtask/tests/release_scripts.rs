@@ -867,6 +867,11 @@ fn the_release_carries_the_linux_packages() {
         assert!(checks.contains(&format!("          - arch: {arch}\n            os: {os}\n")));
     }
     assert!(read(&repo_root().join("bin/linux-package.sh")).contains("glibc_floor=\"2.35\""));
+    // A cache saved on another Ubuntu release would restore tools linked against its glibc.
+    assert!(workflow.contains("          key: ${{ matrix.target }}-${{ matrix.os }}\n"));
+    assert!(
+        checks.contains("          key: linux-packaging-${{ matrix.arch }}-${{ matrix.os }}\n")
+    );
     assert_eq!(
         workflow
             .matches(
